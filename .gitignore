@@ -1,0 +1,22 @@
+# Log files
+*.log
+app.log
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Local music downloads and isolated stems
+Music/
+instrumentals/
+
+# Build and Packaging directories
+build/
+dist/
+*.spec
+
+# Deep Learning weights / cache
+models/
+
+# Local binary assets
+bin/

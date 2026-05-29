@@ -1,0 +1,19 @@
+{
+    "music_root_dir": "C:\\Users\\Smash-Edit\\Desktop\\Webscraping player\\Music",
+    "volume": 49,
+    "use_mock_karaoke": false,
+    "last_playlist": "",
+    "shuffle": false,
+    "repeat": false,
+    "spotify_client_id": "856eb56b3ef244d58192b19815b6f059",
+    "spotify_client_secret": "2c3040b90cd64625b8fd66459a2c1031",
+    "whisper_language": null,
+    "download_instruments": true,
+    "reverb_intensity": 0.2,
+    "web_remote_enabled": false,
+    "gif_playlist": [
+        "mozart dance.gif",
+        "C:/Users/Smash-Edit/Downloads/Puppy Doge GIF by Shibetoshi Nakamoto.gif",
+        "C:/Users/Smash-Edit/Desktop/giphy.gif"
+    ]
+}
