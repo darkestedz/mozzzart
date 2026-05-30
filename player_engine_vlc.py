@@ -123,8 +123,12 @@ class AudioPlayer(QObject):
     def __init__(self):
         super().__init__()
 
-        # Create a single VLC instance with no video output and quiet logging
-        self._vlc_instance = vlc.Instance("--no-video", "--quiet", "--no-xlib")
+        # Create a single VLC instance with isolated volume output on Windows
+        instance_args = ["--no-video", "--quiet", "--no-xlib"]
+        if sys.platform == "win32":
+            instance_args.append("--aout=directsound")
+            
+        self._vlc_instance = vlc.Instance(*instance_args)
 
         # Primary player: standard playback + instrumental stem in karaoke mode
         self._player_main = self._vlc_instance.media_player_new()
@@ -156,6 +160,7 @@ class AudioPlayer(QObject):
         self._master_volume      = 100     # Cached master UI volume
         self._pending_main_volume = None   # Deferred main volume
         self._pending_vocal_volume = None  # Deferred vocal volume
+        self._pending_pause = False        # Deferred pause state
 
         # Attach VLC event listeners to the main player (time changed and end reached)
         self._attach_events(self._player_main)
@@ -208,6 +213,7 @@ class AudioPlayer(QObject):
         self._vocal_pending_seek = None
         self._pending_main_volume = None
         self._pending_vocal_volume = None
+        self._pending_pause = False
 
         try:
             logger.info("clear_karaoke_channels: stopping vocal player...")
@@ -386,6 +392,7 @@ class AudioPlayer(QObject):
 
         state_main = self._player_main.get_state()
         is_main_ready = state_main in (vlc.State.Playing, vlc.State.Paused)
+        is_vocal_ready = False
 
         # Safe deferred seek on Qt thread
         if self._pending_seek is not None and is_main_ready:
@@ -415,6 +422,20 @@ class AudioPlayer(QObject):
                 self._pending_vocal_volume = None
                 self._player_vocal.audio_set_volume(vol)
 
+        # Safe deferred pause on Qt thread
+        if getattr(self, '_pending_pause', False):
+            if self._karaoke_mode:
+                if is_main_ready and is_vocal_ready:
+                    self._player_main.set_pause(1)
+                    self._player_vocal.set_pause(1)
+                    self._pending_pause = False
+                    logger.info("Deferred pause applied to karaoke mixer.")
+            else:
+                if is_main_ready:
+                    self._player_main.set_pause(1)
+                    self._pending_pause = False
+                    logger.info("Deferred pause applied to regular player.")
+
         # Emit position update from the air-gap variable
         if not self.is_paused and self._vlc_pos_ms >= 0:
             self.position_updated.emit(self._vlc_pos_ms / 1000.0)
@@ -435,7 +456,7 @@ class AudioPlayer(QObject):
     # Dual-Player Karaoke Mixer
     # ------------------------------------------------------------------
 
-    def start_karaoke_mixer(self, instrumental_path, vocal_path, start_time=0.0, vocal_volume=0.10):
+    def start_karaoke_mixer(self, instrumental_path, vocal_path, start_time=0.0, vocal_volume=0.10, start_paused=False):
         """
         Activates the dual-player karaoke mixer.
 
@@ -503,12 +524,13 @@ class AudioPlayer(QObject):
             self._karaoke_start_offset = start_time
             self._karaoke_mode         = True
             self._is_active            = True
-            self.is_paused             = False
+            self._pending_pause = start_paused
+            self.is_paused             = start_paused
             self._vlc_ended            = False
             self._vlc_pos_ms           = int(start_time * 1000)
             self._pause_time           = start_time
 
-            self.state_changed.emit("playing")
+            self.state_changed.emit("paused" if start_paused else "playing")
             logger.info(
                 f"Karaoke dual-player mixer started | "
                 f"offset={start_time:.3f}s | vocal_vol={vocal_volume:.2f}"
@@ -525,7 +547,7 @@ class AudioPlayer(QObject):
         self.clear_karaoke_channels()
         logger.info("Karaoke dual-player mixer stopped.")
 
-    def resume_regular_mode(self, original_filepath, start_time_sec):
+    def resume_regular_mode(self, original_filepath, start_time_sec, start_paused=False):
         """
         Cleanly transitions from Karaoke Mode back to standard single-track playback.
 
@@ -559,9 +581,10 @@ class AudioPlayer(QObject):
             self._pause_time   = start_time_sec
             self._vlc_pos_ms   = int(start_time_sec * 1000)
             self._is_active    = True
-            self.is_paused     = False
+            self._pending_pause = start_paused
+            self.is_paused     = start_paused
 
-            self.state_changed.emit("playing")
+            self.state_changed.emit("paused" if start_paused else "playing")
             logger.info(f"resume_regular_mode: VLC stream rebuilt successfully at {start_time_sec:.3f}s")
 
         except Exception as e:

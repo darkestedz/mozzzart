@@ -4102,7 +4102,8 @@ X-GNOME-Autostart-enabled=true"""
                 instrumental_path=instrumental_path,
                 vocal_path=vocal_path,
                 start_time=current_pos,
-                vocal_volume=vocal_vol
+                vocal_volume=vocal_vol,
+                start_paused=was_paused
             )
             if not success:
                 QMessageBox.warning(self, "Mixer Error", "Failed to start the dual-channel karaoke mixer.")
@@ -4119,10 +4120,6 @@ X-GNOME-Autostart-enabled=true"""
             self.btn_full_karaoke.setStyleSheet("background-color: #2D7D46; color: #F0C419; padding: 8px 16px; font-weight: bold; border-radius: 4px; border: 1px solid #F0C419;")
             logger.info("Full Karaoke Mode activated (dual-channel mixer + mic).")
             
-            # FIX: Seamlessly re-pause the mixer and the mic worker if the user was paused
-            if was_paused:
-                self.toggle_playback()
-                
             self.broadcast_state_to_web()
             # Safely flush layout engine without breaking OS maximized window states
             self.centralWidget().layout().invalidate()
@@ -4177,7 +4174,7 @@ X-GNOME-Autostart-enabled=true"""
         # resume_regular_mode() clears karaoke channels then reloads the file from
         # disk and plays from the exact timestamp — no unpausing of stale state.
         if original_path and os.path.isfile(original_path):
-            self.player.resume_regular_mode(original_path, resume_pos)
+            self.player.resume_regular_mode(original_path, resume_pos, start_paused=was_paused)
             # Re-apply the user's volume — the Hard Reboot resets pygame.mixer to 100%
             self.player.set_volume(self.volume_slider.value())
         else:
@@ -4198,10 +4195,6 @@ X-GNOME-Autostart-enabled=true"""
             
         logger.info("Full Karaoke Mode deactivated — streaming engine restored.")
         
-        # FIX: If the user was paused before the hot-swap, instantly re-pause the rebuilt engine
-        if was_paused:
-            self.toggle_playback()
-            
         self.broadcast_state_to_web()
         # Safely flush layout engine without breaking OS maximized window states
         self.centralWidget().layout().invalidate()
