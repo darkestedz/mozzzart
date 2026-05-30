@@ -279,6 +279,7 @@ class AudioPlayer(QObject):
         try:
             # Set deferred seek — _on_playing will apply it once media is ready
             self._pending_seek = int(start_time * 1000) if start_time > 0 else None
+            self._pending_pause = False  # FIX: Clear any lingering deferred pauses
             self._vlc_ended = False
             self._player_main.play()
             self._pause_time = start_time
@@ -295,6 +296,9 @@ class AudioPlayer(QObject):
         # Capture exact position before pausing
         self._pause_time = self.get_current_position()
         self.is_paused = True
+        
+        # FIX: Guarantee the pause command isn't dropped during VLC's Opening state
+        self._pending_pause = True 
 
         self._player_main.set_pause(1)
         if self._karaoke_mode:
@@ -306,6 +310,9 @@ class AudioPlayer(QObject):
 
     def resume(self):
         """Resumes playback (both main and vocal players)."""
+        # FIX: Abort any lingering deferred pauses since the user explicitly wants to play
+        self._pending_pause = False
+        
         if self._is_active and self.is_paused:
             self._player_main.set_pause(0)
             if self._karaoke_mode:
