@@ -153,6 +153,9 @@ class AudioPlayer(QObject):
         # ── Deferred seek (replaces the 50ms QTimer.singleShot hack) ──
         self._pending_seek       = None    # int | None — ms to seek once main media is ready
         self._vocal_pending_seek = None    # int | None — ms to seek once vocal media is ready
+        self._master_volume      = 100     # Cached master UI volume
+        self._pending_main_volume = None   # Deferred main volume
+        self._pending_vocal_volume = None  # Deferred vocal volume
 
         # Attach VLC event listeners to the main player (time changed and end reached)
         self._attach_events(self._player_main)
@@ -203,6 +206,8 @@ class AudioPlayer(QObject):
         # Cancel any pending deferred seeks before stopping
         self._pending_seek = None
         self._vocal_pending_seek = None
+        self._pending_main_volume = None
+        self._pending_vocal_volume = None
 
         try:
             logger.info("clear_karaoke_channels: stopping vocal player...")
@@ -342,8 +347,10 @@ class AudioPlayer(QObject):
         self.seeked.emit(position_seconds)
 
     def set_volume(self, volume_percent):
-        """Sets the main player volume. volume_percent: 0–100 (same as pygame interface)."""
+        """Sets the main player volume. volume_percent: 0–100."""
         vol = int(max(0, min(100, volume_percent)))
+        self._master_volume = vol
+        self._pending_main_volume = vol
         try:
             self._player_main.audio_set_volume(vol)
         except Exception as e:
@@ -371,26 +378,42 @@ class AudioPlayer(QObject):
     def update_polling(self):
         """
         Called periodically (~100ms) to emit position and detect track end.
-        This is the Qt-thread-safe side of the air-gap pattern — it reads
-        variables written by VLC's native C callbacks and emits signals safely.
+        Reads air-gapped C-thread variables and processes deferred seeks/volumes
+        safely once the media state is confirmed as Playing or Paused.
         """
         if not self._is_active:
             return
 
-        # Safe deferred seek on Qt thread
-        if self._pending_seek is not None:
-            if self._player_main.is_playing():
-                seek_ms = self._pending_seek
-                self._pending_seek = None
-                self._player_main.set_time(seek_ms)
-                logger.info(f"Deferred main seek to {seek_ms}ms applied in update_polling.")
+        state_main = self._player_main.get_state()
+        is_main_ready = state_main in (vlc.State.Playing, vlc.State.Paused)
 
-        if self._karaoke_mode and self._vocal_pending_seek is not None:
-            if self._player_vocal.is_playing():
+        # Safe deferred seek on Qt thread
+        if self._pending_seek is not None and is_main_ready:
+            seek_ms = self._pending_seek
+            self._pending_seek = None
+            self._player_main.set_time(seek_ms)
+            logger.info(f"Deferred main seek to {seek_ms}ms applied in update_polling.")
+            
+        # Safe deferred volume on Qt thread
+        if getattr(self, '_pending_main_volume', None) is not None and is_main_ready:
+            vol = self._pending_main_volume
+            self._pending_main_volume = None
+            self._player_main.audio_set_volume(vol)
+
+        if self._karaoke_mode:
+            state_vocal = self._player_vocal.get_state()
+            is_vocal_ready = state_vocal in (vlc.State.Playing, vlc.State.Paused)
+
+            if getattr(self, '_vocal_pending_seek', None) is not None and is_vocal_ready:
                 seek_ms = self._vocal_pending_seek
                 self._vocal_pending_seek = None
                 self._player_vocal.set_time(seek_ms)
                 logger.info(f"Deferred vocal seek to {seek_ms}ms applied in update_polling.")
+                
+            if getattr(self, '_pending_vocal_volume', None) is not None and is_vocal_ready:
+                vol = self._pending_vocal_volume
+                self._pending_vocal_volume = None
+                self._player_vocal.audio_set_volume(vol)
 
         # Emit position update from the air-gap variable
         if not self.is_paused and self._vlc_pos_ms >= 0:
@@ -462,8 +485,14 @@ class AudioPlayer(QObject):
             self._player_vocal.play()
 
             # Step 7: Set volumes — VLC uses 0–100 integer range
-            self._player_main.audio_set_volume(100)
-            self._player_vocal.audio_set_volume(int(vocal_volume * 100))
+            master_vol = getattr(self, '_master_volume', 100)
+            vocal_vol_int = int(vocal_volume * 100)
+            
+            self._pending_main_volume = master_vol
+            self._pending_vocal_volume = vocal_vol_int
+            
+            self._player_main.audio_set_volume(master_vol)
+            self._player_vocal.audio_set_volume(vocal_vol_int)
 
             # Step 8: Apply deferred seek to vocal player via air-gap variable.
             # The persistent _on_vocal_playing callback (attached at __init__) will
@@ -541,8 +570,10 @@ class AudioPlayer(QObject):
     def set_vocal_guide_volume(self, volume_float):
         """Sets the vocal guide player volume. Range: 0.0–1.0 → VLC 0–100."""
         self._vocal_volume = max(0.0, min(1.0, volume_float))
+        vol = int(self._vocal_volume * 100)
+        self._pending_vocal_volume = vol
         try:
-            self._player_vocal.audio_set_volume(int(self._vocal_volume * 100))
+            self._player_vocal.audio_set_volume(vol)
         except Exception:
             pass
         logger.debug(f"Vocal guide volume → {self._vocal_volume:.2f}")

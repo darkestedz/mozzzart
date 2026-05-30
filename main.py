@@ -5091,6 +5091,10 @@ if __name__ == '__main__':
 #   parsing race conditions (MediaPlayerPlaying event instead of 50ms QTimer hack),
 #   macOS dylib routing (VLC_PLUGIN_PATH), and future video handle routing.
 #
+# --- v5.1: libVLC State Race Condition Fixes (2026-05-30) ---
+#
+# v5.1: libVLC State Race Condition Fixes. Resolved a bug where toggling karaoke mode while paused trapped the deferred seek logic by switching the check from .is_playing() to vlc.State.Playing/Paused. Fixed the "Vocal volume bleeding into Normal mode" bug by introducing a deferred volume caching system (_pending_main_volume), guaranteeing VLC accepts audio_set_volume commands after the Opening phase concludes.
+#
 # ==============================================================================
 
 
