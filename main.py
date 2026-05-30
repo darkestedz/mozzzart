@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QLineEdit, QTextEdit, QPlainTextEdit, QProgressBar, QScrollArea,
     QFileDialog, QMessageBox, QFrame, QListWidget, QAbstractItemView,
     QDialog, QHeaderView, QListWidgetItem, QSizePolicy, QSpinBox, QComboBox, QCheckBox,
-    QSizeGrip
+    QSizeGrip, QProgressDialog
 )
 from PyQt6.QtGui import QFont, QIcon, QColor, QPainter, QPen, QImage, QPixmap, QMovie
 import qtawesome as qta
@@ -18,7 +18,7 @@ import qtawesome as qta
 # Import modules
 import utils
 import config
-from player_engine_vlc import AudioPlayer
+from player_engine_vlc import AudioPlayer, HAS_VLC
 from downloader import DownloadWorker
 from karaoke_engine import KaraokeProcessorWorker
 from mic_worker import MicrophoneWorker
@@ -1455,6 +1455,17 @@ class MozZzartPlayerApp(QMainWindow):
     """Core GUI logic for MozZzart Player & Karaoke."""
     def __init__(self):
         super().__init__()
+        
+        # ── Media Engine Guard ──
+        if not HAS_VLC:
+            QMessageBox.critical(
+                None, "Media Engine Missing",
+                "MozZzart Player could not locate its core media components.\n\n"
+                "Please ensure the local 'bin/vlc' folder contains the required shared binaries "
+                "for your operating system, or install desktop VLC Media Player from videolan.org."
+            )
+            sys.exit(1)
+        
         self.setWindowTitle("MozZzart Player")
         self.setWindowIcon(QIcon("logo.png"))
         self.resize(1150, 780)
@@ -1517,6 +1528,9 @@ class MozZzartPlayerApp(QMainWindow):
         if HAS_WEB_REMOTE and self.config.get("web_remote_enabled", False):
             self._start_web_remote()
         
+        # OTA Update Check (asynchronous, non-blocking)
+        QTimer.singleShot(3000, self.check_for_updates)
+        
         logger.info("Aura Player MainWindow initialized successfully.")
 
     def ensure_music_dir_exists(self):
@@ -1537,6 +1551,186 @@ class MozZzartPlayerApp(QMainWindow):
             self.config["music_root_dir"] = local_music
             config.save_config(self.config)
             logger.info(f"Music directory initialized at fallback: {local_music}")
+
+    # ------------------------------------------------------------------
+    # OTA Update System
+    # ------------------------------------------------------------------
+
+    def check_for_updates(self):
+        """Asynchronously checks GitHub Releases for a newer version."""
+        try:
+            version_file = os.path.join(utils.get_app_dir(), "version.json")
+            if not os.path.isfile(version_file):
+                logger.info("OTA: version.json not found, skipping update check.")
+                return
+            with open(version_file, 'r', encoding='utf-8') as f:
+                version_data = json.load(f)
+            
+            current_version = version_data.get("version", "0.0.0")
+            repo_url = version_data.get("repo_url", "")
+            
+            if not repo_url or "YOUR_GITHUB_USERNAME" in repo_url:
+                logger.info("OTA: repo_url not configured, skipping update check.")
+                return
+
+            class UpdateCheckerWorker(QThread):
+                update_available = pyqtSignal(str, str, str)  # tag, zipball_url, body
+                
+                def __init__(self, url, current_ver):
+                    super().__init__()
+                    self.url = url
+                    self.current_ver = current_ver
+                
+                def run(self):
+                    try:
+                        import urllib.request
+                        req = urllib.request.Request(
+                            self.url,
+                            headers={"User-Agent": "MozZzart-Player-OTA/1.0", "Accept": "application/vnd.github.v3+json"}
+                        )
+                        with urllib.request.urlopen(req, timeout=10) as resp:
+                            data = json.loads(resp.read().decode('utf-8'))
+                        
+                        tag = data.get("tag_name", "").lstrip("v")
+                        zipball = data.get("zipball_url", "")
+                        body = data.get("body", "")
+                        
+                        # Compare version strings numerically
+                        def parse_ver(v):
+                            try:
+                                return tuple(int(x) for x in v.split("."))
+                            except ValueError:
+                                return (0, 0, 0)
+                        
+                        if parse_ver(tag) > parse_ver(self.current_ver):
+                            self.update_available.emit(tag, zipball, body)
+                    except Exception as e:
+                        logger.warning(f"OTA update check failed: {e}")
+
+            self._update_worker = UpdateCheckerWorker(repo_url, current_version)
+            self._update_worker.update_available.connect(self._show_update_available)
+            self._update_worker.start()
+            logger.info(f"OTA: Checking for updates (current: v{current_version})...")
+            
+        except Exception as e:
+            logger.warning(f"OTA: Update check failed: {e}")
+
+    def _show_update_available(self, tag, zipball_url, body):
+        """Shows an 'Update Available' button in the sidebar when a new version is found."""
+        self._ota_zipball_url = zipball_url
+        self._ota_tag = tag
+        
+        btn_update = QPushButton(f"  Update to v{tag}")
+        btn_update.setIcon(qta.icon('fa5s.cloud-download-alt', color='#1DB954'))
+        btn_update.setIconSize(QSize(16, 16))
+        btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_update.setStyleSheet("""
+            QPushButton {
+                background-color: #1A3A1A;
+                color: #1DB954;
+                border: 1px solid #1DB954;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-size: 12px;
+                font-weight: bold;
+                text-align: left;
+            }
+            QPushButton:hover {
+                background-color: #1DB954;
+                color: #000000;
+            }
+        """)
+        btn_update.clicked.connect(self._trigger_ota_update)
+        
+        # Insert at the bottom of the sidebar
+        if hasattr(self, 'sidebar') and self.sidebar.layout():
+            self.sidebar.layout().addWidget(btn_update)
+        
+        logger.info(f"OTA: Update v{tag} available! Showing update button.")
+
+    def _trigger_ota_update(self):
+        """Downloads the update ZIP and launches updater.py to apply it."""
+        import tempfile
+        import subprocess
+        
+        zipball_url = getattr(self, '_ota_zipball_url', '')
+        tag = getattr(self, '_ota_tag', 'unknown')
+        
+        if not zipball_url:
+            QMessageBox.warning(self, "Update Error", "No update URL available.")
+            return
+
+        reply = QMessageBox.question(
+            self, "Update MozZzart Player",
+            f"A new version (v{tag}) is available.\n\n"
+            f"The app will download the update, close, and restart automatically.\n"
+            f"Your settings, music library, and VLC binaries will be preserved.\n\n"
+            f"Proceed with the update?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # Show progress dialog
+        progress = QProgressDialog("Downloading update...", "Cancel", 0, 100, self)
+        progress.setWindowTitle("MozZzart OTA Update")
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.show()
+
+        try:
+            import urllib.request
+            
+            temp_dir = tempfile.gettempdir()
+            zip_path = os.path.join(temp_dir, f"mozzzart_update_{tag}.zip")
+            
+            req = urllib.request.Request(
+                zipball_url,
+                headers={"User-Agent": "MozZzart-Player-OTA/1.0"}
+            )
+            
+            with urllib.request.urlopen(req, timeout=120) as response:
+                total_size = int(response.info().get('Content-Length', 0))
+                bytes_downloaded = 0
+                block_size = 8192
+                
+                with open(zip_path, 'wb') as f:
+                    while True:
+                        if progress.wasCanceled():
+                            logger.info("OTA: Update download cancelled by user.")
+                            return
+                        buffer = response.read(block_size)
+                        if not buffer:
+                            break
+                        f.write(buffer)
+                        bytes_downloaded += len(buffer)
+                        if total_size > 0:
+                            progress.setValue(int(bytes_downloaded / total_size * 100))
+                        QApplication.processEvents()
+            
+            progress.setValue(100)
+            progress.setLabelText("Launching updater...")
+            QApplication.processEvents()
+            
+            # Launch the external updater with the zip path and our PID
+            updater_script = os.path.join(utils.get_app_dir(), "updater.py")
+            subprocess.Popen(
+                [sys.executable, updater_script, zip_path, str(os.getpid())],
+                cwd=utils.get_app_dir()
+            )
+            
+            logger.info(f"OTA: Updater launched with zip={zip_path}, pid={os.getpid()}")
+            
+            # Exit the main application so the updater can replace files
+            sys.exit(0)
+            
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "Update Failed", f"Failed to download update:\n{e}")
+            logger.error(f"OTA: Update download failed: {e}")
 
     def setup_ui_layout(self):
         """Builds the comprehensive Spotify-like layout."""
@@ -5087,6 +5281,15 @@ if __name__ == '__main__':
 # --- v5.1: libVLC State Race Condition Fixes (2026-05-30) ---
 #
 # v5.1: libVLC State Race Condition Fixes. Resolved a bug where toggling karaoke mode while paused trapped the deferred seek logic by switching the check from .is_playing() to vlc.State.Playing/Paused. Fixed the "Vocal volume bleeding into Normal mode" bug by introducing a deferred volume caching system (_pending_main_volume), guaranteeing VLC accepts audio_set_volume commands after the Opening phase concludes.
+#
+# --- v5.6 - 5.7: Multi-Platform Portable libVLC & OTA Updates (2026-05-30) ---
+#
+# v5.6 - 5.7: Multi-Platform Portable libVLC & OTA Updates. Implemented unified local bin/vlc/
+# discovery logic across win32, darwin, and linux. Delivered bundle_vlc.py for automated binary
+# extraction. Built asynchronous GitHub release checker and external updater.py featuring strict
+# exclusion zones (config.json, bin/) to safely bypass OS file-locks during live patches. Fixed
+# VLC async duration parsing bug (switched to synchronous mutagen) and volume persistence bug
+# in resume_regular_mode() (master volume now cached and restored across karaoke toggles).
 #
 # ==============================================================================
 

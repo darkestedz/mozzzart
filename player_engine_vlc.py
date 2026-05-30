@@ -17,78 +17,80 @@ import sys
 import os
 import logging
 
-# ── Cross-Platform VLC Library Discovery ─────────────────────────────────────
+logger = logging.getLogger("AuraPlayer")
+
+# ── Cross-Platform Portable libVLC Discovery ───────────────────────────────
 # python-vlc dynamically loads libvlc at import time via ctypes.CDLL().
-# On Windows, it searches CWD first (fails), then PATH. We must inject the
-# VLC install directory into PATH *before* importing the vlc module.
-# On macOS, we set DYLD_LIBRARY_PATH and VLC_PLUGIN_PATH for the .dylib lookup.
+# We check for a LOCAL bin/vlc/ directory FIRST (portable distribution),
+# then fall back to system-wide installations.
+
+_base_dir = os.path.dirname(os.path.abspath(__file__))
+_local_vlc_dir = os.path.join(_base_dir, "bin", "vlc")
+_vlc_dir = None
 
 if sys.platform == "win32":
-    # Strategy: Registry → common "Program Files" paths → give up with a clear error
-    _vlc_dir = None
-
-    # 1. Try Windows Registry (most reliable — works for all install locations)
-    try:
-        import winreg
-        for _hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
-            try:
-                _key = winreg.OpenKey(_hive, r"SOFTWARE\VideoLAN\VLC")
-                _vlc_dir = winreg.QueryValueEx(_key, "InstallDir")[0]
-                winreg.CloseKey(_key)
-                if os.path.isfile(os.path.join(_vlc_dir, "libvlc.dll")):
+    if os.path.isdir(_local_vlc_dir) and os.path.isfile(os.path.join(_local_vlc_dir, "libvlc.dll")):
+        _vlc_dir = _local_vlc_dir
+    else:
+        try:
+            import winreg
+            for _hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                try:
+                    _key = winreg.OpenKey(_hive, r"SOFTWARE\VideoLAN\VLC")
+                    _candidate = winreg.QueryValueEx(_key, "InstallDir")[0]
+                    winreg.CloseKey(_key)
+                    if os.path.isfile(os.path.join(_candidate, "libvlc.dll")):
+                        _vlc_dir = _candidate
+                        break
+                except FileNotFoundError:
+                    continue
+        except Exception:
+            pass
+        if not _vlc_dir:
+            for _path in [
+                os.path.join(os.environ.get("ProgramFiles", ""), "VideoLAN", "VLC"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", ""), "VideoLAN", "VLC")
+            ]:
+                if os.path.isfile(os.path.join(_path, "libvlc.dll")):
+                    _vlc_dir = _path
                     break
-                _vlc_dir = None
-            except FileNotFoundError:
-                continue
-    except Exception:
-        pass
-
-    # 2. Fallback: scan standard install directories
-    if not _vlc_dir:
-        for _candidate in [
-            os.path.join(os.environ.get("ProgramFiles", ""), "VideoLAN", "VLC"),
-            os.path.join(os.environ.get("ProgramFiles(x86)", ""), "VideoLAN", "VLC"),
-            os.path.join(os.environ.get("ProgramW6432", ""), "VideoLAN", "VLC"),
-        ]:
-            if _candidate and os.path.isfile(os.path.join(_candidate, "libvlc.dll")):
-                _vlc_dir = _candidate
-                break
-
     if _vlc_dir:
-        # Inject into PATH so ctypes.CDLL can find libvlc.dll and its dependencies
         os.environ["PATH"] = _vlc_dir + ";" + os.environ.get("PATH", "")
-        # Also set PYTHON_VLC_LIB_PATH for newer python-vlc versions
         os.environ["PYTHON_VLC_LIB_PATH"] = os.path.join(_vlc_dir, "libvlc.dll")
+        os.environ["VLC_PLUGIN_PATH"] = os.path.join(_vlc_dir, "plugins")
 
-        # Architecture mismatch guard: 64-bit Python + 32-bit VLC (or vice versa)
-        import struct
-        _py_bits = struct.calcsize("P") * 8
-        _is_x86_vlc = "x86" in _vlc_dir.lower() or "program files (x86)" in _vlc_dir.lower()
-        if _py_bits == 64 and _is_x86_vlc:
-            print(
-                f"\n{'='*70}\n"
-                f"  [!] ARCHITECTURE MISMATCH DETECTED\n"
-                f"  Your Python is {_py_bits}-bit but VLC is 32-bit.\n"
-                f"  VLC path: {_vlc_dir}\n\n"
-                f"  FIX: Install 64-bit VLC from https://www.videolan.org/vlc/\n"
-                f"       (Choose 'Installer for 64bit version')\n"
-                f"{'='*70}\n"
-            )
+elif sys.platform == "darwin":  # macOS
+    if os.path.isdir(_local_vlc_dir) and os.path.isfile(os.path.join(_local_vlc_dir, "libvlc.dylib")):
+        _vlc_dir = _local_vlc_dir
+    else:
+        _mac_app_path = "/Applications/VLC.app/Contents/MacOS"
+        if os.path.isfile(os.path.join(_mac_app_path, "lib", "libvlc.dylib")):
+            _vlc_dir = os.path.join(_mac_app_path, "lib")
+            os.environ["VLC_PLUGIN_PATH"] = os.path.join(_mac_app_path, "plugins")
+    if _vlc_dir:
+        os.environ["DYLD_LIBRARY_PATH"] = _vlc_dir + ":" + os.environ.get("DYLD_LIBRARY_PATH", "")
+        os.environ["PYTHON_VLC_LIB_PATH"] = os.path.join(_vlc_dir, "libvlc.dylib")
+        if "VLC_PLUGIN_PATH" not in os.environ:
+            os.environ["VLC_PLUGIN_PATH"] = os.path.join(_vlc_dir, "plugins")
 
-elif sys.platform == "darwin":
-    # macOS Dynamic Library Linking Guards
-    vlc_plugin_path = "/Applications/VLC.app/Contents/MacOS/plugins"
-    if os.path.isdir(vlc_plugin_path):
-        os.environ["VLC_PLUGIN_PATH"] = vlc_plugin_path
-    vlc_lib = "/Applications/VLC.app/Contents/MacOS/lib"
-    if os.path.isdir(vlc_lib):
-        os.environ["DYLD_LIBRARY_PATH"] = vlc_lib + ":" + os.environ.get("DYLD_LIBRARY_PATH", "")
+else:  # Linux
+    if os.path.isdir(_local_vlc_dir) and os.path.isfile(os.path.join(_local_vlc_dir, "libvlc.so")):
+        _vlc_dir = _local_vlc_dir
+        os.environ["PYTHON_VLC_LIB_PATH"] = os.path.join(_vlc_dir, "libvlc.so")
+        os.environ["VLC_PLUGIN_PATH"] = os.path.join(_vlc_dir, "plugins")
+
+try:
+    import vlc
+    HAS_VLC = True
+except OSError as e:
+    logger.critical(f"Failed to bind libVLC shared library surface: {e}")
+    HAS_VLC = False
 
 import time
-import vlc
 from PyQt6.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger("VlcPlayerEngine")
+
 
 
 # ==============================================================================
@@ -256,13 +258,18 @@ class AudioPlayer(QObject):
             self._vlc_ended = False
             self._vlc_pos_ms = 0
 
-            # Resolve duration by parsing the media metadata
-            media.parse_with_options(vlc.MediaParseFlag.local, timeout=5000)
-            duration_ms = media.get_duration()
-            if duration_ms > 0:
-                self.track_duration = duration_ms / 1000.0
-            else:
-                self.track_duration = 180.0  # Fallback
+            # Resolve duration synchronously using mutagen
+            try:
+                import mutagen
+                audio_meta = mutagen.File(file_path)
+                if audio_meta and audio_meta.info:
+                    self.track_duration = float(audio_meta.info.length)
+                else:
+                    self.track_duration = 180.0
+            except Exception as e:
+                logger.warning(f"Mutagen duration resolution failed: {e}")
+                self.track_duration = 180.0
+
             self.duration_resolved.emit(self.track_duration)
 
             logger.info(f"Loaded track: {file_path} (Duration: {self.track_duration:.2f}s)")
@@ -495,13 +502,18 @@ class AudioPlayer(QObject):
             self._last_vocal_path = vocal_path
             self._vocal_volume    = vocal_volume
 
-            # Step 4: Resolve duration from instrumental media
-            media_instr.parse_with_options(vlc.MediaParseFlag.local, timeout=5000)
-            duration_ms = media_instr.get_duration()
-            if duration_ms > 0:
-                self.track_duration = duration_ms / 1000.0
-            else:
+            # Step 4: Resolve duration from instrumental media using mutagen
+            try:
+                import mutagen
+                audio_meta = mutagen.File(instrumental_path)
+                if audio_meta and audio_meta.info:
+                    self.track_duration = float(audio_meta.info.length)
+                else:
+                    self.track_duration = 180.0
+            except Exception as e:
+                logger.warning(f"Mutagen duration resolution failed: {e}")
                 self.track_duration = 180.0
+
             self.duration_resolved.emit(self.track_duration)
 
             # Step 5: Set deferred seek for both players
@@ -583,7 +595,12 @@ class AudioPlayer(QObject):
             self._vlc_ended = False
             self._player_main.play()
 
-            # Step 4: Update internal state
+            # Step 4: Restore master volume
+            master_vol = getattr(self, '_master_volume', 100)
+            self._pending_main_volume = master_vol
+            self._player_main.audio_set_volume(master_vol)
+
+            # Step 5: Update internal state
             self.current_track = original_filepath
             self._pause_time   = start_time_sec
             self._vlc_pos_ms   = int(start_time_sec * 1000)
@@ -629,13 +646,12 @@ class AudioPlayer(QObject):
     # ------------------------------------------------------------------
 
     def _resolve_duration(self, file_path):
-        """Resolves track duration in seconds using VLC media parsing."""
+        """Resolves track duration in seconds using mutagen."""
         try:
-            media = self._vlc_instance.media_new(file_path)
-            media.parse_with_options(vlc.MediaParseFlag.local, timeout=5000)
-            duration_ms = media.get_duration()
-            if duration_ms > 0:
-                return duration_ms / 1000.0
+            import mutagen
+            audio_meta = mutagen.File(file_path)
+            if audio_meta and audio_meta.info:
+                return float(audio_meta.info.length)
         except Exception as e:
-            logger.warning(f"VLC duration resolution failed: {e}")
+            logger.warning(f"Mutagen duration resolution failed: {e}")
         return 180.0  # Fallback
