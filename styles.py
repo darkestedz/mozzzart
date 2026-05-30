@@ -92,7 +92,6 @@ QPushButton#PlayButton {
     font-size: 18px;
     text-align: center;
     border: 3px solid #2D7D46;
-    font-family: 'Segoe MDL2 Assets', 'Segoe UI Symbol', 'Outfit', sans-serif;
 }
 
 QPushButton#PlayButton:hover {
@@ -117,7 +116,6 @@ QPushButton#NavButton {
     padding: 0px;
     text-align: center;
     border-radius: 22px;
-    font-family: 'Segoe MDL2 Assets', 'Segoe UI Symbol', 'Outfit', sans-serif;
 }
 
 QPushButton#NavButton:hover {

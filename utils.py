@@ -39,15 +39,17 @@ def get_models_dir():
     return models_dir
 
 def get_ffmpeg_path():
-    """Returns the absolute path to local ffmpeg.exe."""
-    return os.path.join(get_bin_dir(), "ffmpeg.exe")
+    """Returns the absolute path to the local ffmpeg binary."""
+    ext = ".exe" if sys.platform == "win32" else ""
+    return os.path.join(get_bin_dir(), f"ffmpeg{ext}")
 
 def get_ytdlp_path():
-    """Returns the absolute path to local yt-dlp.exe."""
-    return os.path.join(get_bin_dir(), "yt-dlp.exe")
+    """Returns the absolute path to the local yt-dlp binary."""
+    ext = ".exe" if sys.platform == "win32" else ""
+    return os.path.join(get_bin_dir(), f"yt-dlp{ext}")
 
 def has_dependencies():
-    """Checks if local ffmpeg.exe and yt-dlp.exe exist."""
+    """Checks if local ffmpeg and yt-dlp binaries exist."""
     ffmpeg_exists = os.path.isfile(get_ffmpeg_path())
     ytdlp_exists = os.path.isfile(get_ytdlp_path())
     return ffmpeg_exists and ytdlp_exists
@@ -91,11 +93,16 @@ def setup_dependencies(progress_callback=None, status_callback=None):
     ffmpeg_path = get_ffmpeg_path()
     ytdlp_path = get_ytdlp_path()
     
-    # 1. Setup yt-dlp
+    # 1. Setup yt-dlp (cross-platform)
     if not os.path.isfile(ytdlp_path):
         if status_callback:
-            status_callback("Downloading yt-dlp.exe...")
-        ytdlp_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+            status_callback("Downloading yt-dlp...")
+        if sys.platform == "win32":
+            ytdlp_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+        elif sys.platform == "darwin":
+            ytdlp_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+        else:
+            ytdlp_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
         
         # We will split progress between yt-dlp (20%) and ffmpeg (80%)
         def ytdlp_progress(p):
@@ -104,62 +111,90 @@ def setup_dependencies(progress_callback=None, status_callback=None):
                 
         success = download_file_with_progress(ytdlp_url, ytdlp_path, ytdlp_progress)
         if not success:
-            raise Exception("Failed to download yt-dlp.exe")
+            raise Exception("Failed to download yt-dlp")
+        # Ensure Unix binaries are executable
+        if sys.platform != "win32":
+            os.chmod(ytdlp_path, 0o755)
     else:
-        logger.info("yt-dlp.exe already exists.")
+        logger.info("yt-dlp binary already exists.")
         if progress_callback:
             progress_callback(0.2)
 
-    # 2. Setup ffmpeg
+    # 2. Setup ffmpeg (cross-platform)
     if not os.path.isfile(ffmpeg_path):
         if status_callback:
-            status_callback("Downloading FFmpeg zip package...")
+            status_callback("Downloading FFmpeg...")
         
-        # yt-dlp hosted ffmpeg builds are highly compatible and standard
-        ffmpeg_url = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+        # Platform-specific FFmpeg builds
+        if sys.platform == "win32":
+            ffmpeg_url = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+        elif sys.platform == "darwin":
+            ffmpeg_url = "https://evermeet.cx/ffmpeg/getrelease/zip"
+        else:
+            ffmpeg_url = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
         
-        temp_zip = os.path.join(tempfile.gettempdir(), "ffmpeg_temp.zip")
+        temp_archive = os.path.join(tempfile.gettempdir(), "ffmpeg_temp_archive")
         
         def ffmpeg_progress(p):
             if progress_callback:
                 progress_callback(0.2 + (p * 0.7)) # ffmpeg download is 70% of total
                 
-        success = download_file_with_progress(ffmpeg_url, temp_zip, ffmpeg_progress)
+        success = download_file_with_progress(ffmpeg_url, temp_archive, ffmpeg_progress)
         if not success:
-            raise Exception("Failed to download FFmpeg zip archive")
+            raise Exception("Failed to download FFmpeg archive")
             
         if status_callback:
             status_callback("Extracting FFmpeg...")
             
         try:
-            with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-                # Find ffmpeg.exe inside the zip file
-                # The zip structure is usually: ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe
-                ffmpeg_member = None
-                ffprobe_member = None
-                for member in zip_ref.namelist():
-                    if member.endswith("ffmpeg.exe"):
-                        ffmpeg_member = member
-                    elif member.endswith("ffprobe.exe"):
-                        ffprobe_member = member
-                
-                if ffmpeg_member:
-                    # Extract ffmpeg.exe
-                    with zip_ref.open(ffmpeg_member) as source, open(ffmpeg_path, 'wb') as target:
-                        shutil.copyfileobj(source, target)
-                    logger.info("Successfully extracted ffmpeg.exe")
-                else:
-                    raise Exception("ffmpeg.exe not found in downloaded zip archive.")
+            if ffmpeg_url.endswith(".tar.xz"):
+                import tarfile
+                with tarfile.open(temp_archive, 'r:xz') as tar:
+                    for member in tar.getmembers():
+                        basename = os.path.basename(member.name)
+                        if basename == "ffmpeg":
+                            member.name = basename
+                            tar.extract(member, bin_dir)
+                            logger.info("Successfully extracted ffmpeg")
+                        elif basename == "ffprobe":
+                            member.name = basename
+                            tar.extract(member, bin_dir)
+                            logger.info("Successfully extracted ffprobe")
+            else:
+                with zipfile.ZipFile(temp_archive, 'r') as zip_ref:
+                    ffmpeg_member = None
+                    ffprobe_member = None
+                    ffmpeg_name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+                    ffprobe_name = "ffprobe.exe" if sys.platform == "win32" else "ffprobe"
+                    for member in zip_ref.namelist():
+                        if member.endswith(ffmpeg_name):
+                            ffmpeg_member = member
+                        elif member.endswith(ffprobe_name):
+                            ffprobe_member = member
                     
-                if ffprobe_member:
-                    ffprobe_path = os.path.join(bin_dir, "ffprobe.exe")
-                    with zip_ref.open(ffprobe_member) as source, open(ffprobe_path, 'wb') as target:
-                        shutil.copyfileobj(source, target)
-                    logger.info("Successfully extracted ffprobe.exe")
+                    if ffmpeg_member:
+                        with zip_ref.open(ffmpeg_member) as source, open(ffmpeg_path, 'wb') as target:
+                            shutil.copyfileobj(source, target)
+                        logger.info("Successfully extracted ffmpeg")
+                    else:
+                        raise Exception("ffmpeg not found in downloaded archive.")
+                        
+                    if ffprobe_member:
+                        ffprobe_path = os.path.join(bin_dir, ffprobe_name)
+                        with zip_ref.open(ffprobe_member) as source, open(ffprobe_path, 'wb') as target:
+                            shutil.copyfileobj(source, target)
+                        logger.info("Successfully extracted ffprobe")
+            
+            # Ensure Unix binaries are executable
+            if sys.platform != "win32":
+                os.chmod(ffmpeg_path, 0o755)
+                ffprobe_unix = os.path.join(bin_dir, "ffprobe")
+                if os.path.exists(ffprobe_unix):
+                    os.chmod(ffprobe_unix, 0o755)
         finally:
-            if os.path.exists(temp_zip):
+            if os.path.exists(temp_archive):
                 try:
-                    os.remove(temp_zip)
+                    os.remove(temp_archive)
                 except Exception:
                     pass
                     
@@ -168,17 +203,22 @@ def setup_dependencies(progress_callback=None, status_callback=None):
         if status_callback:
             status_callback("FFmpeg extraction completed successfully!")
     else:
-        logger.info("ffmpeg.exe already exists.")
+        logger.info("ffmpeg binary already exists.")
         if progress_callback:
             progress_callback(1.0)
             
     return True
 
 def update_ytdlp():
-    """Updates yt-dlp to the latest version."""
+    """Updates yt-dlp to the latest version (cross-platform)."""
     ytdlp_path = get_ytdlp_path()
     temp_ytdlp = ytdlp_path + ".new"
-    ytdlp_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+    if sys.platform == "win32":
+        ytdlp_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+    elif sys.platform == "darwin":
+        ytdlp_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+    else:
+        ytdlp_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
     
     logger.info("Checking/Updating yt-dlp to the latest release...")
     try:
@@ -187,6 +227,9 @@ def update_ytdlp():
             if os.path.exists(ytdlp_path):
                 os.remove(ytdlp_path)
             os.rename(temp_ytdlp, ytdlp_path)
+            # Ensure Unix binaries are executable
+            if sys.platform != "win32":
+                os.chmod(ytdlp_path, 0o755)
             logger.info("yt-dlp updated successfully!")
             return True
     except Exception as e:

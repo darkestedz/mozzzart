@@ -35,14 +35,18 @@ class KaraokeProcessorWorker(QThread):
         self.song_dir = os.path.dirname(song_path)
         self.song_name = os.path.splitext(os.path.basename(song_path))[0]
         
-        # Smart Hardware Detection
+        # Smart Hardware Detection (CUDA → MPS → CPU)
         import torch
+        
         if torch.cuda.is_available():
             self.processing_device = "cuda"
-            logger.info("🚀 NVIDIA GPU (CUDA) detected! AI processing will run at maximum speed.")
+            logging.getLogger("AuraPlayer").info("🚀 NVIDIA GPU (CUDA) detected! Running at max speed.")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            self.processing_device = "mps"
+            logging.getLogger("AuraPlayer").info("🍏 Apple Silicon (MPS) detected! Running via Metal acceleration.")
         else:
             self.processing_device = "cpu"
-            logger.warning("⚠️ No CUDA GPU detected. Falling back to CPU. AI processing will be significantly slower.")
+            logging.getLogger("AuraPlayer").warning("⚠️ No compatible GPU detected. Falling back to CPU.")
         
     def run(self):
         # Run at low priority so audio playback never starves
@@ -185,7 +189,7 @@ class KaraokeProcessorWorker(QThread):
                 "-m",
                 "demucs",
                 "--two-stems=vocals",
-                "-d", getattr(self, 'processing_device', 'cpu'),  # Dynamically routes to CUDA or CPU
+                "-d", "cpu" if getattr(self, 'processing_device', 'cpu') == "mps" else getattr(self, 'processing_device', 'cpu'),  # MPS not supported by Demucs CLI, falls back to CPU
                 "-o", temp_dir,
                 self.song_path
             ]

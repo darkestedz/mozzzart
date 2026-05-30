@@ -13,11 +13,12 @@ from PyQt6.QtWidgets import (
     QSizeGrip
 )
 from PyQt6.QtGui import QFont, QIcon, QColor, QPainter, QPen, QImage, QPixmap, QMovie
+import qtawesome as qta
 
 # Import modules
 import utils
 import config
-from player_engine import AudioPlayer
+from player_engine_vlc import AudioPlayer
 from downloader import DownloadWorker
 from karaoke_engine import KaraokeProcessorWorker
 from mic_worker import MicrophoneWorker
@@ -746,14 +747,13 @@ class MiniPlayerWindow(QWidget):
         top_row.addWidget(self.mini_title, stretch=1)
 
         # Expand upwards button
-        self.btn_expand = QPushButton("\uE70E")   # MDL2 Chevron Up
+        self.btn_expand = QPushButton()
+        self.btn_expand.setIcon(qta.icon('fa5s.chevron-up', color='#1DB954'))
+        self.btn_expand.setIconSize(QSize(13, 13))
         self.btn_expand.setToolTip("Expand Library")
         self.btn_expand.setFixedSize(28, 28)
         self.btn_expand.setStyleSheet("""
             QPushButton {
-                font-family: 'Segoe MDL2 Assets';
-                font-size: 13px;
-                color: #1DB954;
                 background: transparent;
                 border: none;
                 border-radius: 6px;
@@ -764,14 +764,13 @@ class MiniPlayerWindow(QWidget):
         top_row.addWidget(self.btn_expand)
 
         # Restore (maximize) button
-        btn_restore = QPushButton("\uE923")   # MDL2 maximize glyph
+        btn_restore = QPushButton()
+        btn_restore.setIcon(qta.icon('fa5s.expand', color='#F0C419'))
+        btn_restore.setIconSize(QSize(13, 13))
         btn_restore.setToolTip("Restore Full Player")
         btn_restore.setFixedSize(28, 28)
         btn_restore.setStyleSheet("""
             QPushButton {
-                font-family: 'Segoe MDL2 Assets';
-                font-size: 13px;
-                color: #F0C419;
                 background: transparent;
                 border: none;
                 border-radius: 6px;
@@ -782,14 +781,13 @@ class MiniPlayerWindow(QWidget):
         top_row.addWidget(btn_restore)
 
         # Close button
-        btn_close = QPushButton("\uE711")    # MDL2 close X glyph
+        btn_close = QPushButton()
+        btn_close.setIcon(qta.icon('fa5s.times', color='#888888'))
+        btn_close.setIconSize(QSize(13, 13))
         btn_close.setToolTip("Close MozZzart")
         btn_close.setFixedSize(28, 28)
         btn_close.setStyleSheet("""
             QPushButton {
-                font-family: 'Segoe MDL2 Assets';
-                font-size: 13px;
-                color: #888888;
                 background: transparent;
                 border: none;
                 border-radius: 6px;
@@ -811,60 +809,65 @@ class MiniPlayerWindow(QWidget):
         ctrl_row.setSpacing(6)
         ctrl_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        mini_icon_size = QSize(15, 15)
         btn_style = """
             QPushButton {
-                font-family: 'Segoe MDL2 Assets', 'Segoe UI Symbol';
-                font-size: 15px;
-                color: #B3B3B3;
                 background: transparent;
                 border: none;
                 border-radius: 6px;
                 min-width: 32px;
                 min-height: 32px;
             }
-            QPushButton:hover { color: #F0C419; background: #1A1A1A; }
-            QPushButton:pressed { color: #FFFFFF; }
+            QPushButton:hover { background: #1A1A1A; }
+            QPushButton:pressed { background: #2A2A2A; }
         """
 
-        self.mini_shuffle = SlashedButton("\uE8B1")
+        self.mini_shuffle = SlashedButton()
+        self.mini_shuffle.setIcon(qta.icon('fa5s.random', color='#B3B3B3'))
+        self.mini_shuffle.setIconSize(mini_icon_size)
         self.mini_shuffle.setStyleSheet(btn_style)
         self.mini_shuffle.setToolTip("Shuffle")
         self.mini_shuffle.clicked.connect(self.main_app.toggle_shuffle)
         ctrl_row.addWidget(self.mini_shuffle)
 
-        mini_prev = QPushButton("\uE892")
+        mini_prev = QPushButton()
+        mini_prev.setIcon(qta.icon('fa5s.step-backward', color='#B3B3B3'))
+        mini_prev.setIconSize(mini_icon_size)
         mini_prev.setStyleSheet(btn_style)
         mini_prev.setToolTip("Previous")
         mini_prev.clicked.connect(self.main_app.play_previous_track)
         ctrl_row.addWidget(mini_prev)
 
-        self.mini_play = QPushButton("\uE768")
+        self.mini_play = QPushButton()
+        self.mini_play.setIcon(qta.icon('fa5s.play', color='#0A0A0A'))
+        self.mini_play.setIconSize(QSize(16, 16))
         self.mini_play.setFixedSize(40, 40)
         self.mini_play.setToolTip("Play / Pause")
         self.mini_play.setStyleSheet("""
             QPushButton {
-                font-family: 'Segoe MDL2 Assets', 'Segoe UI Symbol';
-                font-size: 16px;
-                color: #0A0A0A;
                 background-color: #F0C419;
                 border: none;
                 border-radius: 20px;
                 min-width: 40px;
                 min-height: 40px;
             }
-            QPushButton:hover { background-color: #2D7D46; color: #FFFFFF; }
+            QPushButton:hover { background-color: #2D7D46; }
             QPushButton:pressed { background-color: #1A5C2E; }
         """)
         self.mini_play.clicked.connect(self.main_app.toggle_playback)
         ctrl_row.addWidget(self.mini_play)
 
-        mini_next = QPushButton("\uE893")
+        mini_next = QPushButton()
+        mini_next.setIcon(qta.icon('fa5s.step-forward', color='#B3B3B3'))
+        mini_next.setIconSize(mini_icon_size)
         mini_next.setStyleSheet(btn_style)
         mini_next.setToolTip("Next")
         mini_next.clicked.connect(self.main_app.play_next_track)
         ctrl_row.addWidget(mini_next)
 
-        self.mini_repeat = SlashedButton("\uE8EE")
+        self.mini_repeat = SlashedButton()
+        self.mini_repeat.setIcon(qta.icon('fa5s.redo-alt', color='#B3B3B3'))
+        self.mini_repeat.setIconSize(mini_icon_size)
         self.mini_repeat.setStyleSheet(btn_style)
         self.mini_repeat.setToolTip("Repeat")
         self.mini_repeat.clicked.connect(self.main_app.toggle_repeat)
@@ -921,14 +924,14 @@ class MiniPlayerWindow(QWidget):
         curr_geom = self.geometry()
         
         if self.is_expanded:
-            self.btn_expand.setText("\uE70D") # Chevron Down
+            self.btn_expand.setIcon(qta.icon('fa5s.chevron-down', color='#1DB954'))  # Chevron Down
             self.populate_mini_library()
             self.library_container.show()
             self.setFixedSize(380, 480)
             # Shift Y up by the difference (480 - 110 = 370) so the bottom anchors
             self.move(curr_geom.x(), curr_geom.y() - 370)
         else:
-            self.btn_expand.setText("\uE70E") # Chevron Up
+            self.btn_expand.setIcon(qta.icon('fa5s.chevron-up', color='#1DB954'))  # Chevron Up
             self.library_container.hide()
             self.setFixedSize(380, 110)
             # Shift Y down by the difference to collapse neatly back to the taskbar
@@ -986,7 +989,7 @@ class MiniPlayerWindow(QWidget):
 
     def update_play_state(self, is_playing):
         """Called from the main app whenever play/pause state changes."""
-        self.mini_play.setText("\uE769" if is_playing else "\uE768")
+        self.mini_play.setIcon(qta.icon('fa5s.pause' if is_playing else 'fa5s.play', color='#0A0A0A'))
         if is_playing and getattr(self, 'full_title_text', "") and len(self.full_title_text) > 20:
             self.marquee_timer.start(250)
         else:
@@ -1517,13 +1520,23 @@ class MozZzartPlayerApp(QMainWindow):
         logger.info("Aura Player MainWindow initialized successfully.")
 
     def ensure_music_dir_exists(self):
-        """Ensures a valid music root directory is loaded."""
-        if not self.config["music_root_dir"] or not os.path.isdir(self.config["music_root_dir"]):
+        """Ensures a valid music root directory is loaded. Includes cross-OS path sanitization."""
+        import re
+        saved_dir = self.config.get("music_root_dir", "")
+        # Cross-OS Config Sanitizer: detect if the saved path belongs to a different OS
+        if saved_dir:
+            is_windows_path = bool(re.match(r'^[a-zA-Z]:', saved_dir))
+            if sys.platform == "win32" and not is_windows_path and not saved_dir.startswith("\\\\"):
+                saved_dir = ""  # Unix path on Windows — force reset
+            elif sys.platform != "win32" and is_windows_path:
+                saved_dir = ""  # Windows path on Unix — force reset
+        
+        if not saved_dir or not os.path.isdir(saved_dir):
             local_music = os.path.join(utils.get_app_dir(), "Music")
             os.makedirs(local_music, exist_ok=True)
             self.config["music_root_dir"] = local_music
             config.save_config(self.config)
-            logger.info(f"Music directory initialized at fallback location: {local_music}")
+            logger.info(f"Music directory initialized at fallback: {local_music}")
 
     def setup_ui_layout(self):
         """Builds the comprehensive Spotify-like layout."""
@@ -1648,7 +1661,9 @@ class MozZzartPlayerApp(QMainWindow):
         center_layout.setSpacing(8)
         center_controls.setLayout(center_layout)
         
-        # Media Buttons with pristine Unicode media symbols
+        # Media Buttons with universal FontAwesome vector icons (qtawesome)
+        icon_color = '#B3B3B3'
+        icon_size = QSize(18, 18)
         media_buttons = QWidget()
         buttons_layout = QHBoxLayout()
         buttons_layout.setContentsMargins(0, 0, 0, 0)
@@ -1656,7 +1671,9 @@ class MozZzartPlayerApp(QMainWindow):
         buttons_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         media_buttons.setLayout(buttons_layout)
         
-        self.btn_shuffle = SlashedButton("\uE8B1")
+        self.btn_shuffle = SlashedButton()
+        self.btn_shuffle.setIcon(qta.icon('fa5s.random', color=icon_color))
+        self.btn_shuffle.setIconSize(icon_size)
         self.btn_shuffle.setObjectName("NavButton")
         self.btn_shuffle.setToolTip("Shuffle Mode")
         self.btn_shuffle.setSlashed(not self.config["shuffle"])
@@ -1664,22 +1681,30 @@ class MozZzartPlayerApp(QMainWindow):
         self.btn_shuffle.clicked.connect(self.toggle_shuffle)
         buttons_layout.addWidget(self.btn_shuffle)
         
-        self.btn_prev = QPushButton("\uE892")
+        self.btn_prev = QPushButton()
+        self.btn_prev.setIcon(qta.icon('fa5s.step-backward', color=icon_color))
+        self.btn_prev.setIconSize(icon_size)
         self.btn_prev.setObjectName("NavButton")
         self.btn_prev.clicked.connect(self.play_previous_track)
         buttons_layout.addWidget(self.btn_prev)
         
-        self.btn_play_pause = QPushButton("\uE768")
+        self.btn_play_pause = QPushButton()
+        self.btn_play_pause.setIcon(qta.icon('fa5s.play', color='#F0C419'))
+        self.btn_play_pause.setIconSize(QSize(20, 20))
         self.btn_play_pause.setObjectName("PlayButton")
         self.btn_play_pause.clicked.connect(self.toggle_playback)
         buttons_layout.addWidget(self.btn_play_pause)
         
-        self.btn_next = QPushButton("\uE893")
+        self.btn_next = QPushButton()
+        self.btn_next.setIcon(qta.icon('fa5s.step-forward', color=icon_color))
+        self.btn_next.setIconSize(icon_size)
         self.btn_next.setObjectName("NavButton")
         self.btn_next.clicked.connect(self.play_next_track)
         buttons_layout.addWidget(self.btn_next)
         
-        self.btn_repeat = SlashedButton("\uE8EE")
+        self.btn_repeat = SlashedButton()
+        self.btn_repeat.setIcon(qta.icon('fa5s.redo-alt', color=icon_color))
+        self.btn_repeat.setIconSize(icon_size)
         self.btn_repeat.setObjectName("NavButton")
         self.btn_repeat.setToolTip("Repeat Mode")
         self.btn_repeat.setSlashed(not self.config["repeat"])
@@ -3171,6 +3196,17 @@ class MozZzartPlayerApp(QMainWindow):
         # Fire Layout Debug manually on F12
         elif event.key() == Qt.Key.Key_F12:
             self.dump_layout_debug()
+        # OS Media Key hooks for laptop playback buttons
+        # Windows keyboards send Key_MediaTogglePlayPause (not Key_MediaPlay/Key_MediaPause)
+        elif event.key() in (Qt.Key.Key_MediaPlay, Qt.Key.Key_MediaPause, Qt.Key.Key_MediaTogglePlayPause):
+            self.toggle_playback()
+        elif event.key() == Qt.Key.Key_MediaNext:
+            self.play_next_track()
+        elif event.key() == Qt.Key.Key_MediaPrevious:
+            self.play_previous_track()
+        elif event.key() == Qt.Key.Key_MediaStop:
+            if hasattr(self, 'audio_player') and self.audio_player:
+                self.audio_player.stop()
         super().keyPressEvent(event)
 
     def changeEvent(self, event):
@@ -3633,7 +3669,7 @@ class MozZzartPlayerApp(QMainWindow):
     def on_player_state_changed(self, state):
         """Toggles play buttons based on active mixer states."""
         if state == "playing":
-            self.btn_play_pause.setText("\uE769")
+            self.btn_play_pause.setIcon(qta.icon('fa5s.pause', color='#F0C419'))
             self.mini_player.update_play_state(True)
             if hasattr(self, 'btn_edit_lyrics'):
                 self.btn_edit_lyrics.setEnabled(False)
@@ -3645,7 +3681,7 @@ class MozZzartPlayerApp(QMainWindow):
                 if hasattr(self, 'mozart_left'): self.mozart_left.start()
                 if hasattr(self, 'mozart_right'): self.mozart_right.start()
         else:
-            self.btn_play_pause.setText("\uE768")
+            self.btn_play_pause.setIcon(qta.icon('fa5s.play', color='#F0C419'))
             self.mini_player.update_play_state(False)
             if hasattr(self, 'btn_edit_lyrics'):
                 self.btn_edit_lyrics.setEnabled(True)
@@ -3851,6 +3887,69 @@ class MozZzartPlayerApp(QMainWindow):
         self.btn_repeat.setProperty("active", "true" if self.config["repeat"] else "false")
         self.btn_repeat.style().unpolish(self.btn_repeat)
         self.btn_repeat.style().polish(self.btn_repeat)
+
+    def set_run_on_startup(self, enable):
+        """Registers/unregisters the application for auto-start on login (cross-platform)."""
+        app_path = sys.executable if getattr(sys, 'frozen', False) else f'"{ sys.executable}" "{os.path.abspath(__file__)}"'
+        
+        if sys.platform == "win32":
+            # Windows: Registry key
+            try:
+                import winreg
+                key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
+                if enable:
+                    winreg.SetValueEx(key, "MozZzartPlayer", 0, winreg.REG_SZ, app_path)
+                else:
+                    try:
+                        winreg.DeleteValue(key, "MozZzartPlayer")
+                    except FileNotFoundError:
+                        pass
+                winreg.CloseKey(key)
+                logger.info(f"Startup {'enabled' if enable else 'disabled'} via Windows Registry.")
+            except Exception as e:
+                logger.error(f"Failed to set startup registry: {e}")
+                
+        elif sys.platform == "darwin":
+            # macOS: LaunchAgents plist
+            plist_path = os.path.expanduser("~/Library/LaunchAgents/com.mozzzart.player.plist")
+            if enable:
+                plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.mozzzart.player</string>
+    <key>ProgramArguments</key><array><string>{app_path}</string></array>
+    <key>RunAtLoad</key><true/>
+</dict>
+</plist>"""
+                os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+                with open(plist_path, 'w') as f:
+                    f.write(plist_content)
+                logger.info("Startup enabled via macOS LaunchAgent plist.")
+            else:
+                if os.path.exists(plist_path):
+                    os.remove(plist_path)
+                logger.info("Startup disabled — macOS plist removed.")
+                    
+        elif sys.platform.startswith("linux"):
+            # Linux: XDG autostart desktop entry
+            desktop_path = os.path.expanduser("~/.config/autostart/mozzzart.desktop")
+            if enable:
+                desktop_content = f"""[Desktop Entry]
+Type=Application
+Name=MozZzart Player
+Exec={app_path}
+Hidden=false
+X-GNOME-Autostart-enabled=true"""
+                os.makedirs(os.path.dirname(desktop_path), exist_ok=True)
+                with open(desktop_path, 'w') as f:
+                    f.write(desktop_content)
+                logger.info("Startup enabled via Linux .desktop autostart.")
+            else:
+                if os.path.exists(desktop_path):
+                    os.remove(desktop_path)
+                logger.info("Startup disabled — Linux .desktop removed.")
 
     # ==========================
     # BACKGROUND SEQUENTIAL KARAOKE PROCESSING
@@ -4380,6 +4479,10 @@ class MozZzartPlayerApp(QMainWindow):
 
 
 def main():
+    # Linux Wayland Transparency Fix: force X11 rendering to prevent black window artifacts
+    if sys.platform.startswith("linux"):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+    
     # Bind portable bin/ containing FFmpeg to system PATH at runtime
     # This guarantees Whisper and Demucs find FFmpeg seamlessly without system-wide modifications
     utils.bind_ffmpeg_to_path()
@@ -4961,6 +5064,32 @@ if __name__ == '__main__':
 # SMART HARDWARE FALLBACK:
 # - Upgraded karaoke_engine.py to intelligently detect environment hardware using torch.cuda.is_available().
 # - The pipeline now dynamically assigns processing_device to either "cuda" or "cpu", guaranteeing maximum GPU performance for NVIDIA users while preventing fatal crashes for users sharing the app on unsupported hardware.
+#
+# ==============================================================================
+#
+# --- v4.11-4.12: Universal Cross-Platform Architecture & UI Overhaul (2026-05-30) ---
+#
+# CROSS-PLATFORM ARCHITECTURE:
+# - Patched AI hardware routing to support Apple Silicon (MPS) via torch.backends.mps.
+# - Demucs subprocess guards MPS→CPU since Demucs CLI does not support Metal natively.
+# - Added set_run_on_startup() for macOS .plist (LaunchAgents) and Linux .desktop (XDG autostart).
+# - Hardened utils.py downloader to detect sys.platform for yt-dlp and FFmpeg URLs.
+# - Added os.chmod(0o755) for Unix binary executability.
+# - Added cross-OS config sanitizer in ensure_music_dir_exists() to prevent fatal crashes
+#   when a Windows config.json is loaded on macOS/Linux (detects drive letter paths).
+# - Added Linux Wayland transparency fix (QT_QPA_PLATFORM="xcb") before QApplication init.
+# - Added native OS media key support (Key_MediaPlay/Pause/Next/Previous) in keyPressEvent.
+#
+# UI OVERHAUL:
+# - Replaced all 18 Windows-exclusive Segoe MDL2 Assets Unicode glyphs with universal
+#   qtawesome (FontAwesome 5 Solid) vector icons across main bar and mini player.
+# - Purged font-family: 'Segoe MDL2 Assets' from 7 stylesheet locations (styles.py + main.py inline).
+# - All setText() glyph calls converted to setIcon(qta.icon()) for cross-platform rendering.
+#
+# libVLC MIGRATION BLUEPRINT:
+# - Created player_engine_vlc.py with robust C-thread safety (air-gap pattern),
+#   parsing race conditions (MediaPlayerPlaying event instead of 50ms QTimer hack),
+#   macOS dylib routing (VLC_PLUGIN_PATH), and future video handle routing.
 #
 # ==============================================================================
 
