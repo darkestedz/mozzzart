@@ -57,12 +57,16 @@ def has_dependencies():
 def download_file_with_progress(url, dest_path, progress_callback=None):
     """Downloads a file from a URL with optional progress callback (receives float 0.0 - 1.0)."""
     logger.info(f"Starting download of {url} to {dest_path}")
+    
+    last_exception = None
+    
+    # Method 1: Standard urllib secure request
     try:
         req = urllib.request.Request(
             url, 
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         )
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:
             total_size = int(response.info().get('Content-Length', 0))
             bytes_downloaded = 0
             block_size = 8192
@@ -77,11 +81,108 @@ def download_file_with_progress(url, dest_path, progress_callback=None):
                     if total_size > 0 and progress_callback:
                         progress = bytes_downloaded / total_size
                         progress_callback(progress)
-        logger.info(f"Download complete: {dest_path}")
+        logger.info(f"Download complete via standard urllib: {dest_path}")
         return True
     except Exception as e:
-        logger.error(f"Failed to download {url}: {e}")
-        return False
+        last_exception = e
+        logger.warning(f"Standard urllib download failed for {url} ({e}). Retrying with unverified SSL context fallback...")
+        
+    # Method 2: Unverified SSL context urllib request (fixes Windows root CA certificate issue)
+    try:
+        import ssl
+        context = ssl._create_unverified_context()
+        req = urllib.request.Request(
+            url, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
+        with urllib.request.urlopen(req, context=context, timeout=30) as response:
+            total_size = int(response.info().get('Content-Length', 0))
+            bytes_downloaded = 0
+            block_size = 8192
+            
+            with open(dest_path, 'wb') as f:
+                while True:
+                    buffer = response.read(block_size)
+                    if not buffer:
+                        break
+                    f.write(buffer)
+                    bytes_downloaded += len(buffer)
+                    if total_size > 0 and progress_callback:
+                        progress = bytes_downloaded / total_size
+                        progress_callback(progress)
+        logger.info(f"Download complete via unverified urllib SSL context: {dest_path}")
+        return True
+    except Exception as e:
+        last_exception = e
+        logger.warning(f"Unverified SSL context urllib download failed for {url} ({e}). Trying system curl fallback...")
+
+    # Method 3: System curl tool (allows -k for insecure, follows redirects with -L)
+    try:
+        import subprocess
+        import shutil
+        if shutil.which("curl"):
+            logger.info("curl executable found. Initiating curl subprocess download...")
+            cmd = ["curl", "-k", "-L", "-o", dest_path, url]
+            startupinfo = None
+            if sys.platform == "win32":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            
+            res = subprocess.run(
+                cmd, 
+                startupinfo=startupinfo,
+                capture_output=True, 
+                timeout=120
+            )
+            if res.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+                logger.info(f"Download complete via system curl: {dest_path}")
+                if progress_callback:
+                    progress_callback(1.0)
+                return True
+            else:
+                err_msg = res.stderr.decode("utf-8", errors="ignore").strip()
+                logger.warning(f"curl download exited with code {res.returncode}: {err_msg}")
+                last_exception = Exception(f"curl exited with code {res.returncode}: {err_msg}")
+        else:
+            logger.warning("curl is not available in the system PATH.")
+    except Exception as e:
+        logger.warning(f"curl download failed with exception: {e}")
+        last_exception = e
+
+    # Method 4: PowerShell Invoke-WebRequest (Windows specific)
+    if sys.platform == "win32":
+        try:
+            logger.info("Attempting PowerShell WebClient download fallback...")
+            import subprocess
+            ps_script = (
+                "[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}; "
+                f"Invoke-WebRequest -Uri '{url}' -OutFile '{dest_path}' -UseBasicParsing"
+            )
+            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script]
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            
+            res = subprocess.run(
+                cmd, 
+                startupinfo=startupinfo,
+                capture_output=True, 
+                timeout=120
+            )
+            if res.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+                logger.info(f"Download complete via PowerShell: {dest_path}")
+                if progress_callback:
+                    progress_callback(1.0)
+                return True
+            else:
+                err_msg = res.stderr.decode("utf-8", errors="ignore").strip()
+                logger.warning(f"PowerShell download exited with code {res.returncode}: {err_msg}")
+                last_exception = Exception(f"PowerShell exited with code {res.returncode}: {err_msg}")
+        except Exception as e:
+            logger.warning(f"PowerShell download failed with exception: {e}")
+            last_exception = e
+
+    # Raise the final consolidated exception if all methods failed
+    raise last_exception
 
 def setup_dependencies(progress_callback=None, status_callback=None):
     """
@@ -109,9 +210,18 @@ def setup_dependencies(progress_callback=None, status_callback=None):
             if progress_callback:
                 progress_callback(p * 0.2)
                 
-        success = download_file_with_progress(ytdlp_url, ytdlp_path, ytdlp_progress)
-        if not success:
-            raise Exception("Failed to download yt-dlp")
+        try:
+            download_file_with_progress(ytdlp_url, ytdlp_path, ytdlp_progress)
+        except Exception as e:
+            raise Exception(
+                f"Failed to download yt-dlp: {e}\n\n"
+                "Suggestions to fix:\n"
+                "1. Check your internet connection.\n"
+                "2. If this machine lacks internet access or blocks GitHub downloads, please manually download 'yt-dlp.exe' from:\n"
+                "   https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe\n"
+                "   and place it inside the 'bin/' folder next to MozZzartPlayer.exe.\n"
+                "3. Verify that the 'bin/' folder has write permissions."
+            )
         # Ensure Unix binaries are executable
         if sys.platform != "win32":
             os.chmod(ytdlp_path, 0o755)
@@ -139,9 +249,18 @@ def setup_dependencies(progress_callback=None, status_callback=None):
             if progress_callback:
                 progress_callback(0.2 + (p * 0.7)) # ffmpeg download is 70% of total
                 
-        success = download_file_with_progress(ffmpeg_url, temp_archive, ffmpeg_progress)
-        if not success:
-            raise Exception("Failed to download FFmpeg archive")
+        try:
+            download_file_with_progress(ffmpeg_url, temp_archive, ffmpeg_progress)
+        except Exception as e:
+            raise Exception(
+                f"Failed to download FFmpeg: {e}\n\n"
+                "Suggestions to fix:\n"
+                "1. Check your internet connection.\n"
+                "2. If this machine lacks internet access or blocks GitHub downloads, please manually download the FFmpeg zip from:\n"
+                f"   {ffmpeg_url}\n"
+                "   extract 'ffmpeg.exe' and 'ffprobe.exe', and place them inside the 'bin/' folder next to MozZzartPlayer.exe.\n"
+                "3. Verify that the 'bin/' folder has write permissions."
+            )
             
         if status_callback:
             status_callback("Extracting FFmpeg...")
