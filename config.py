@@ -17,7 +17,8 @@ DEFAULT_CONFIG = {
     "repeat": False,
     "spotify_client_id": "",
     "spotify_client_secret": "",
-    "web_remote_enabled": True
+    "web_remote_enabled": True,
+    "gemini_api_key": ""
 }
 
 def get_config_path():

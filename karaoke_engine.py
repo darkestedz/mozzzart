@@ -48,6 +48,8 @@ class KaraokeProcessorWorker(QThread):
             self.processing_device = "cpu"
             logging.getLogger("AuraPlayer").warning("⚠️ No compatible GPU detected. Falling back to CPU.")
         
+        self.process = None
+        
     def run(self):
         # Run at low priority so audio playback never starves
         self.setPriority(QThread.Priority.LowPriority)
@@ -194,33 +196,41 @@ class KaraokeProcessorWorker(QThread):
                 self.song_path
             ]
             
-            env = os.environ.copy()
-            env["PYTHONIOENCODING"] = "utf-8"
+            # Capture the active environment and append the explicit encoding directive
+            current_env = os.environ.copy()
+            current_env["PYTHONIOENCODING"] = "utf-8"
 
             # Execute Demucs subprocess safely without shell=True
-            process = subprocess.Popen(
+            popen_kwargs = {}
+            if sys.platform == "win32":
+                # Flag 0x08000000 is CREATE_NO_WINDOW. Prevents the black cmd pop-up and parent kill-chain.
+                popen_kwargs["creationflags"] = 0x08000000
+            
+            # Apply the modified environment dictionary to the subprocess handler
+            self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
+                env=current_env,
                 shell=False,
-                env=env
+                text=True,
+                encoding="utf-8",  # Forces explicit UTF-8 stream rendering
+                errors='replace',
+                **popen_kwargs
             )
             
             # Read stdout to update progress
             while True:
-                line = process.stdout.readline()
+                line = self.process.stdout.readline()
                 if not line:
                     break
                 logger.info(f"Demucs: {line.strip()}")
                 if "Selected jobs" in line or "Separating" in line:
                     self.progress_signal.emit("Isolating vocals (Demucs)...", 25)
                     
-            process.wait()
-            if process.returncode != 0:
-                raise Exception(f"Demucs stem separation failed with return code {process.returncode}")
+            self.process.wait()
+            if self.process.returncode != 0:
+                raise Exception(f"Demucs stem separation failed with return code {self.process.returncode}")
                 
             logger.info(f"Demucs Complete for [{self.song_name}]")
             self.progress_signal.emit("Vocal stem isolated successfully!", 50)
@@ -402,3 +412,30 @@ class KaraokeProcessorWorker(QThread):
             # Clean up the Demucs temporary files
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def terminate_process(self):
+        """Explicitly terminates the running subprocess if it exists."""
+        if hasattr(self, 'process') and self.process:
+            try:
+                if self.process.poll() is None:  # Process is still active
+                    logger.info(f"Terminating background Demucs subprocess (PID {self.process.pid})...")
+                    self.process.terminate()
+                    # Wait up to 2 seconds for a clean exit, otherwise escalate to kill
+                    for _ in range(20):
+                        if self.process.poll() is not None:
+                            break
+                        time.sleep(0.1)
+                    if self.process.poll() is None:
+                        logger.warning(f"Demucs process (PID {self.process.pid}) did not terminate. Killing it...")
+                        self.process.kill()
+            except Exception as e:
+                logger.error(f"Error terminating Demucs subprocess: {e}")
+            finally:
+                self.process = None
+
+    def quit(self):
+        self.terminate_process()
+        super().quit()
+
+    def __del__(self):
+        self.terminate_process()

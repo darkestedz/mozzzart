@@ -109,8 +109,19 @@ def main():
 
     # Relaunch the application
     print("[updater] Relaunching MozZzart Player...")
-    main_py = os.path.join(app_dir, "main.py")
-    subprocess.Popen([sys.executable, main_py], cwd=app_dir)
+    is_frozen = getattr(sys, 'frozen', False)
+    if is_frozen:
+        if sys.platform == "win32":
+            main_executable = os.path.join(app_dir, "MozZzartPlayer.exe")
+        else:
+            main_executable = os.path.join(app_dir, "MozZzartPlayer")
+        print(f"[updater] Launching compiled player: {main_executable}")
+        subprocess.Popen([main_executable], cwd=app_dir)
+    else:
+        main_py = os.path.join(app_dir, "main.py")
+        print(f"[updater] Launching dev player: {sys.executable} {main_py}")
+        subprocess.Popen([sys.executable, main_py], cwd=app_dir)
+        
     print("[updater] Done. Exiting updater.")
     sys.exit(0)
 

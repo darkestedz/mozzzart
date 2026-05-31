@@ -3,6 +3,29 @@ import re
 import sys
 import logging
 import json
+import ctypes
+
+# ── PyInstaller Windowed Stream Protection ──────────────────────────────────
+# In --windowed mode, PyInstaller sets sys.stdout and sys.stderr to None.
+# Background ML libraries (like stable_ts and tqdm) frequently attempt to 
+# write download progress to the console. We map them to a dummy stream here.
+class DummyStream:
+    def write(self, data): pass
+    def flush(self): pass
+
+if sys.stdout is None:
+    sys.stdout = DummyStream()
+if sys.stderr is None:
+    sys.stderr = DummyStream()
+# ── Windows Taskbar Icon Grouping Hook ─────────────────────────────────────
+# Forces Windows to treat this process as its own app rather than grouping
+# it under 'python.exe', ensuring our custom icon shows in the taskbar.
+if sys.platform == "win32":
+    try:
+        myappid = "darkestedz.mozzzartplayer.player.v5"
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    except Exception as e:
+        print(f"[!] Failed to set explicit AppUserModelID: {e}")
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QThread
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -10,7 +33,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QLineEdit, QTextEdit, QPlainTextEdit, QProgressBar, QScrollArea,
     QFileDialog, QMessageBox, QFrame, QListWidget, QAbstractItemView,
     QDialog, QHeaderView, QListWidgetItem, QSizePolicy, QSpinBox, QComboBox, QCheckBox,
-    QSizeGrip, QProgressDialog
+    QSizeGrip, QProgressDialog, QTabWidget
 )
 from PyQt6.QtGui import QFont, QIcon, QColor, QPainter, QPen, QImage, QPixmap, QMovie
 import qtawesome as qta
@@ -33,6 +56,50 @@ from styles import SPOTIFY_STYLE
 # Setup initial logs
 utils.configure_logger_to_file()
 logger = logging.getLogger("AuraPlayer")
+
+WHISPER_LANGUAGES = [
+    "Afrikaans", "Albanian", "Amharic", "Arabic", "Armenian", "Assamese", 
+    "Azerbaijani", "Bashkir", "Basque", "Belarusian", "Bengali", "Bosnian", 
+    "Breton", "Bulgarian", "Cantonese", "Catalan", "Chinese", "Croatian", 
+    "Czech", "Danish", "Dutch", "English", "Estonian", "Faroese", "Finnish", 
+    "French", "Galician", "Georgian", "German", "Greek", "Gujarati", 
+    "Haitian Creole", "Hausa", "Hawaiian", "Hebrew", "Hindi", "Hungarian", 
+    "Icelandic", "Indonesian", "Italian", "Japanese", "Javanese", "Kannada", 
+    "Kazakh", "Khmer", "Korean", "Lao", "Latin", "Latvian", "Lingala", 
+    "Lithuanian", "Luxembourgish", "Macedonian", "Malagasy", "Malay", 
+    "Malayalam", "Maltese", "Maori", "Marathi", "Mongolian", "Myanmar", 
+    "Nepali", "Norwegian", "Norwegian Nynorsk", "Occitan", "Pashto", 
+    "Persian", "Polish", "Portuguese", "Punjabi", "Romanian", "Russian", 
+    "Sanskrit", "Serbian", "Shona", "Sindhi", "Sinhala", "Slovak", 
+    "Slovenian", "Somali", "Spanish", "Sundanese", "Swahili", "Swedish", 
+    "Tagalog", "Tajik", "Tamil", "Tatar", "Telugu", "Thai", "Tibetan", 
+    "Turkish", "Turkmen", "Ukrainian", "Urdu", "Uzbek", "Vietnamese", 
+    "Welsh", "Yiddish", "Yoruba"
+]
+
+# ── Environment Configuration ─────────────────────────────────────────────
+# sys.frozen is automatically set by PyInstaller when the app is compiled.
+# If True, we are in the public Production build. If False, we are in Dev mode.
+IS_DEV_MODE = not getattr(sys, 'frozen', False)
+
+def get_asset_path(filename):
+    """Resolves absolute path to asset files for compiled and developer modes."""
+    if os.path.isabs(filename):
+        return filename
+    if not IS_DEV_MODE:
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    resolved = os.path.join(base_dir, filename)
+    if os.path.exists(resolved):
+        return resolved
+    return os.path.abspath(filename)
+
+
+class NoScrollComboBox(QComboBox):
+    """Custom QComboBox that ignores mouse wheel events to prevent accidental changes while scrolling."""
+    def wheelEvent(self, event):
+        event.ignore()
 
 class SlashedButton(QPushButton):
     """Custom button that draws a clean diagonal slash directly on top of any MDL2 vector icon when slashed is True."""
@@ -63,7 +130,8 @@ class MozartPlayer(QLabel):
         super().__init__()
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-        self.movie = QMovie(gif_path)
+        resolved_path = get_asset_path(gif_path)
+        self.movie = QMovie(resolved_path)
         self.movie.setCacheMode(QMovie.CacheMode.CacheAll)
         
         # Jump to the first frame to read the GIF's native resolution
@@ -101,7 +169,8 @@ class MozartPlayer(QLabel):
         """Seamlessly hot-swaps the GIF, recalculates scale, and resumes playback."""
         was_playing = (self.movie.state() == QMovie.MovieState.Running)
         self.movie.stop()
-        self.movie.setFileName(gif_path)
+        resolved_path = get_asset_path(gif_path)
+        self.movie.setFileName(resolved_path)
         self.movie.jumpToFrame(0)
         
         native_size = self.movie.currentImage().size()
@@ -236,7 +305,7 @@ class DependencySetupDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("First-Time Setup")
-        self.setWindowIcon(QIcon("logo.png"))
+        self.setWindowIcon(QIcon(get_asset_path("logo.png")))
         self.setFixedSize(400, 220)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint)
         self.setStyleSheet("background-color: #121212; color: white;")
@@ -317,7 +386,7 @@ class SpotifyCredentialsDialog(QDialog):
     def __init__(self, parent=None, client_id="", client_secret=""):
         super().__init__(parent)
         self.setWindowTitle("Spotify Developer Credentials")
-        self.setWindowIcon(QIcon("logo.png"))
+        self.setWindowIcon(QIcon(get_asset_path("logo.png")))
         self.setFixedSize(450, 290)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint)
         self.setStyleSheet("""
@@ -706,7 +775,7 @@ class MiniPlayerWindow(QWidget):
         super().__init__()
         self.main_app = main_app
         self.setWindowTitle("MozZzart Mini")
-        self.setWindowIcon(QIcon("logo.png"))
+        self.setWindowIcon(QIcon(get_asset_path("logo.png")))
         self.setFixedSize(380, 110)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
@@ -1102,6 +1171,44 @@ class LyricsCorrectionDialog(QDialog):
         # Buttons Row
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(10)
+        
+        self.btn_smart_correct = QPushButton("✨ Smart Correction")
+        self.btn_smart_correct.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_smart_correct.setStyleSheet("""
+            QPushButton {
+                background-color: #1A1A1A;
+                color: #F0C419;
+                border: 1px solid #F0C419;
+            }
+            QPushButton:hover {
+                background-color: #F0C419;
+                color: #121212;
+            }
+            QPushButton:disabled {
+                background-color: #222222;
+                color: #555555;
+                border: 1px solid #333333;
+            }
+        """)
+        self.btn_smart_correct.clicked.connect(self.handle_smart_correct)
+        
+        # Check Gemini API Key
+        cfg = {}
+        parent = self.parent()
+        if parent and hasattr(parent, 'config'):
+            cfg = parent.config
+        else:
+            try:
+                import config
+                cfg = config.load_config()
+            except Exception:
+                pass
+        self.gemini_api_key = cfg.get("gemini_api_key", "").strip()
+        if not self.gemini_api_key:
+            self.btn_smart_correct.setEnabled(False)
+            self.btn_smart_correct.setToolTip("Please input a Gemini API Key in Settings to unlock Smart Correction.")
+            
+        btn_layout.addWidget(self.btn_smart_correct)
         btn_layout.addStretch()
         
         btn_cancel = QPushButton("Cancel")
@@ -1217,9 +1324,82 @@ class LyricsCorrectionDialog(QDialog):
             self.confirmed_lyrics = self.fit_corrected_lyrics(self.original_lyrics_db["lyrics"], corrected_text)
             self.accept()
         except Exception as e:
-            QMessageBox.critical(self, "Error Aligning", f"An internal error occurred while trying to fit corrected lyrics:\n{e}")
             logger.error(f"Error fitting lyrics: {e}", exc_info=True)
             
+    def handle_smart_correct(self):
+        """Uses Gemini AI to correct lyrics typos while preserving line layout structure."""
+        if not self.gemini_api_key:
+            QMessageBox.warning(self, "No API Key", "Please configure a Gemini API Key in Settings first.")
+            return
+            
+        self.btn_smart_correct.setEnabled(False)
+        self.btn_smart_correct.setText("🧠 Processing...")
+        if hasattr(self, 'btn_confirm') and self.btn_confirm:
+            self.btn_confirm.setEnabled(False)
+            
+        # Get raw lines and construct structured array payload
+        raw_text = self.text_edit.toPlainText()
+        raw_lines = [line.strip() for line in raw_text.split("\n")]
+        
+        # Safe isolation checks
+        if not any(raw_lines):
+            QMessageBox.warning(self, "Empty Lyrics", "Cannot correct empty lyrics.")
+            self.btn_smart_correct.setEnabled(True)
+            self.btn_smart_correct.setText("✨ Smart Correction")
+            if hasattr(self, 'btn_confirm') and self.btn_confirm:
+                self.btn_confirm.setEnabled(True)
+            return
+
+        import json
+        prompt_payload = json.dumps(raw_lines)
+        
+        system_instruction = (
+            "You are an expert audio transcription editor and lyrics proofreader. "
+            "Your task is to correct typographical errors, spelling mistakes, punctuation slips, "
+            "and grammatical slips in the provided lyrics. "
+            "Crucially, you MUST maintain a strict 1:1 mapping between the input lines and the output lines. "
+            "Do NOT add new lines, do NOT delete existing lines, and do NOT merge lines. "
+            "Each element in the output JSON array must correspond exactly to the line at the same index in the input JSON array. "
+            "Preserve the semantic content and style of the song. Do not censor any words. "
+            "Return the corrected lines as a JSON array of strings, for example: "
+            '["Line 1 corrected", "Line 2 corrected", "Line 3 corrected"]'
+        )
+        
+        prompt = (
+            f"Please correct the following lyrics lines. You must return a JSON array of strings containing exactly "
+            f"{len(raw_lines)} strings, corresponding line-by-line to the input lines.\n\nInput lines:\n{prompt_payload}"
+        )
+        
+        self.correction_worker = GeminiLyricsCorrectionWorker(self.gemini_api_key, prompt, system_instruction)
+        
+        def on_finished(returned_json):
+            # Handshake verification:
+            if len(returned_json) == len(raw_lines):
+                corrected_text = "\n".join(returned_json)
+                self.text_edit.setPlainText(corrected_text)
+                QMessageBox.information(self, "Success", "Smart Correction applied successfully!")
+            else:
+                QMessageBox.warning(
+                    self, 
+                    "Alignment Mismatch", 
+                    f"Correction failed: Structural alignment mismatch (expected {len(raw_lines)} lines, got {len(returned_json)}). Please try re-rolling."
+                )
+            cleanup()
+            
+        def on_error(error_msg):
+            QMessageBox.critical(self, "Correction Failed", f"AI correction error:\n{error_msg}")
+            cleanup()
+            
+        def cleanup():
+            self.btn_smart_correct.setEnabled(True)
+            self.btn_smart_correct.setText("✨ Smart Correction")
+            if hasattr(self, 'btn_confirm') and self.btn_confirm:
+                self.btn_confirm.setEnabled(True)
+                
+        self.correction_worker.finished.connect(on_finished)
+        self.correction_worker.error.connect(on_error)
+        self.correction_worker.start()
+
     def fit_corrected_lyrics(self, original_lyrics, corrected_text):
         import difflib
         import re
@@ -1467,7 +1647,7 @@ class MozZzartPlayerApp(QMainWindow):
             sys.exit(1)
         
         self.setWindowTitle("MozZzart Player")
-        self.setWindowIcon(QIcon("logo.png"))
+        self.setWindowIcon(QIcon(get_asset_path("logo.png")))
         self.resize(1150, 780)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -1485,6 +1665,7 @@ class MozZzartPlayerApp(QMainWindow):
         
         # Audio Player Init
         self.player = AudioPlayer()
+        self.player.main_app = self
         
         # UI State Variables
         self.scanned_songs = []
@@ -1504,6 +1685,9 @@ class MozZzartPlayerApp(QMainWindow):
         self.download_queue_worker = None
         self.download_progress_widgets = {}
         
+        # Initialize Discovery Session Re-roll Cap (v5.8.0)
+        self.reroll_count = 10
+
         # Setup UI
         self.setup_ui_layout()
         
@@ -1522,14 +1706,28 @@ class MozZzartPlayerApp(QMainWindow):
         # Load initial songs list
         self.scan_music_library()
         self.update_volume_controls()
+
+        
+        # Safe 2-second deferred startup auto-run (Amendment 2)
+        api_key = self.config.get("gemini_api_key", "").strip()
+        if api_key:
+            logger.info("Scheduling deferred Gemini Discovery Feed generation in 2 seconds...")
+            QTimer.singleShot(2000, self.run_gemini_discovery)
         
         # Start Flask Web Remote / TV Streaming Server
+        self.web_remote_enabled = False
+        self.config["web_remote_enabled"] = False
         self.web_remote_worker = None
         if HAS_WEB_REMOTE and self.config.get("web_remote_enabled", False):
             self._start_web_remote()
         
         # OTA Update Check (asynchronous, non-blocking)
         QTimer.singleShot(3000, self.check_for_updates)
+        
+        # Hardware Audio Sync Watchdog — corrects dual-VLC karaoke drift every second
+        self.audio_sync_timer = QTimer(self)
+        self.audio_sync_timer.timeout.connect(self.player.enforce_karaoke_sync)
+        self.audio_sync_timer.start(1000)
         
         logger.info("Aura Player MainWindow initialized successfully.")
 
@@ -1583,6 +1781,19 @@ class MozZzartPlayerApp(QMainWindow):
                 
                 def run(self):
                     try:
+                        import os
+                        if "MOZZZART_OTA_SIM_TAG" in os.environ and "MOZZZART_OTA_SIM_ZIP" in os.environ:
+                            tag = os.environ["MOZZZART_OTA_SIM_TAG"]
+                            zipball = os.environ["MOZZZART_OTA_SIM_ZIP"]
+                            
+                            def parse_ver(v):
+                                try: return tuple(int(x) for x in v.split("."))
+                                except ValueError: return (0, 0, 0)
+                                
+                            if parse_ver(tag) > parse_ver(self.current_ver):
+                                self.update_available.emit(tag, zipball, "Mock Local Simulation Update")
+                            return
+
                         import urllib.request
                         req = urllib.request.Request(
                             self.url,
@@ -1715,17 +1926,35 @@ class MozZzartPlayerApp(QMainWindow):
             progress.setLabelText("Launching updater...")
             QApplication.processEvents()
             
-            # Launch the external updater with the zip path and our PID
-            updater_script = os.path.join(utils.get_app_dir(), "updater.py")
-            subprocess.Popen(
-                [sys.executable, updater_script, zip_path, str(os.getpid())],
-                cwd=utils.get_app_dir()
-            )
+            # Determine the correct updater command based on environment
+            if IS_DEV_MODE:
+                updater_script = os.path.join(utils.get_app_dir(), "updater.py")
+                updater_cmd = [sys.executable, updater_script]
+            else:
+                # In production, sys.executable points to MozZzartPlayer.exe. 
+                # We need to call the adjacent compiled updater binary.
+                base_dir = os.path.dirname(sys.executable)
+                if sys.platform == "win32":
+                    updater_cmd = [os.path.join(base_dir, "updater.exe")]
+                else:
+                    updater_cmd = [os.path.join(base_dir, "updater")]
             
-            logger.info(f"OTA: Updater launched with zip={zip_path}, pid={os.getpid()}")
+            # Append arguments
+            updater_cmd.extend([zip_path, str(os.getpid())])
             
-            # Exit the main application so the updater can replace files
-            sys.exit(0)
+            logger.info(f"Launching OTA Updater: {updater_cmd}")
+            subprocess.Popen(updater_cmd, cwd=utils.get_app_dir())
+            
+            # Zombie Subprocess on Update Protection:
+            # Because we use os._exit(0), Qt's closeEvent is bypassed.
+            # We must explicitly terminate the active background karaoke worker's subprocess first.
+            if hasattr(self, 'active_karaoke_worker') and self.active_karaoke_worker:
+                logger.info("OTA: Terminating active background karaoke worker before exit.")
+                if hasattr(self.active_karaoke_worker, 'terminate_process'):
+                    self.active_karaoke_worker.terminate_process()
+            
+            # Exit the main application forcefully so the updater can immediately replace files
+            os._exit(0)
             
         except Exception as e:
             progress.close()
@@ -1842,7 +2071,7 @@ class MozZzartPlayerApp(QMainWindow):
         self.lbl_song_artist = QLabel()
         self.lbl_song_artist.setObjectName("ArtistLabel")
         # Load and scale logo
-        logo_pixmap = QPixmap("logo.png").scaled(120, 30, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        logo_pixmap = QPixmap(get_asset_path("logo.png")).scaled(120, 30, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         self.lbl_song_artist.setPixmap(logo_pixmap)
         info_layout.addWidget(self.lbl_song_artist)
         
@@ -1937,7 +2166,8 @@ class MozZzartPlayerApp(QMainWindow):
         right_panel.setFixedWidth(340)
         right_layout = QHBoxLayout()
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
+        right_layout.setSpacing(4)
+        right_layout.addStretch()  # Push volume controls and buttons to the right to eliminate gaps
         right_panel.setLayout(right_layout)
         
         # Toggle Karaoke Panel
@@ -1987,6 +2217,8 @@ class MozZzartPlayerApp(QMainWindow):
 
         if index == 0:
             self.btn_lib.setStyleSheet("color: #F0C419; font-weight: bold; background-color: #1A1A1A;")
+            if hasattr(self, 'library_tabs'):
+                self.library_tabs.setCurrentIndex(2)
         elif index == 1:
             self.btn_queue.setStyleSheet("color: #F0C419; font-weight: bold; background-color: #1A1A1A;")
         elif index == 2:
@@ -2009,7 +2241,202 @@ class MozZzartPlayerApp(QMainWindow):
         layout.setSpacing(15)
         page.setLayout(layout)
         
-        # Header Controls
+        # Create QTabWidget for premium Library tabs (Step 3)
+        self.library_tabs = QTabWidget()
+        self.library_tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #1E1E1E;
+                background-color: #0E0E0E;
+                border-radius: 8px;
+            }
+            QTabBar::tab {
+                background-color: #121212;
+                color: #B3B3B3;
+                padding: 10px 20px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                font-weight: bold;
+                font-size: 13px;
+                margin-right: 4px;
+            }
+            QTabBar::tab:hover {
+                background-color: #1A1A1A;
+                color: white;
+            }
+            QTabBar::tab:selected {
+                background-color: #0E0E0E;
+                color: #F0C419;
+                border-bottom: 2px solid #F0C419;
+            }
+        """)
+        self.library_tabs.currentChanged.connect(self.on_library_tab_changed)
+        
+        # ----------------------------------------------------
+        # Tab 1: Discovery Feed
+        # ----------------------------------------------------
+        tab_discovery = QWidget()
+        disc_layout = QVBoxLayout()
+        disc_layout.setContentsMargins(20, 20, 20, 20)
+        disc_layout.setSpacing(15)
+        tab_discovery.setLayout(disc_layout)
+        
+        # Discovery Controls Row
+        disc_controls = QHBoxLayout()
+        
+        # Genre input
+        genre_lbl = QLabel("Genre Filter:")
+        genre_lbl.setStyleSheet("color: #B3B3B3; font-weight: bold; font-size: 12px;")
+        disc_controls.addWidget(genre_lbl)
+        
+        self.txt_discovery_genre = QLineEdit()
+        self.txt_discovery_genre.setPlaceholderText("e.g. 90s grunge, synthwave, jazz")
+        self.txt_discovery_genre.setStyleSheet("""
+            QLineEdit {
+                background-color: #1C1C1C;
+                border: 1px solid #2C2C2C;
+                border-radius: 6px;
+                padding: 8px 12px;
+                color: white;
+                font-size: 12px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #F0C419;
+            }
+        """)
+        disc_controls.addWidget(self.txt_discovery_genre, stretch=1)
+        
+        # Re-roll Button (initialized session counter 10)
+        self.btn_reroll_feed = QPushButton(f"Re-roll Feed ({self.reroll_count} Left)")
+        self.btn_reroll_feed.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_reroll_feed.setStyleSheet("""
+            QPushButton {
+                background-color: #1A1A1A;
+                color: #F0C419;
+                border: 1px solid #F0C419;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #F0C419;
+                color: black;
+            }
+            QPushButton:disabled {
+                border-color: #444;
+                color: #666;
+                background-color: #121212;
+            }
+        """)
+        self.btn_reroll_feed.clicked.connect(self.reroll_discovery_feed)
+        disc_controls.addWidget(self.btn_reroll_feed)
+        
+        disc_layout.addLayout(disc_controls)
+        
+        # Table of Recommendations
+        self.table_discovery = QTableWidget()
+        self.table_discovery.setColumnCount(3)
+        self.table_discovery.setHorizontalHeaderLabels(["Select", "Title", "Artist"])
+        self.table_discovery.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.table_discovery.setColumnWidth(0, 80)
+        self.table_discovery.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table_discovery.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table_discovery.verticalHeader().setVisible(False)
+        self.table_discovery.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table_discovery.setStyleSheet("""
+            QTableWidget {
+                background-color: #121212;
+                gridline-color: #1E1E1E;
+                color: white;
+                border: 1px solid #1E1E1E;
+                border-radius: 6px;
+            }
+            QTableWidget::item {
+                padding: 10px;
+            }
+            QHeaderView::section {
+                background-color: #1A1A1A;
+                color: #B3B3B3;
+                padding: 8px;
+                border: none;
+                font-weight: bold;
+            }
+        """)
+        disc_layout.addWidget(self.table_discovery)
+        
+        # Download Selected Button Row
+        dl_row = QHBoxLayout()
+        self.btn_download_selected = QPushButton("📥 Download Selected Tracks")
+        self.btn_download_selected.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_download_selected.setStyleSheet("""
+            QPushButton {
+                background-color: #2D7D46;
+                color: white;
+                border-radius: 20px;
+                padding: 10px 24px;
+                font-weight: bold;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #399B55;
+            }
+        """)
+        self.btn_download_selected.clicked.connect(self.download_selected_tracks)
+        dl_row.addWidget(self.btn_download_selected)
+        dl_row.addStretch()
+        disc_layout.addLayout(dl_row)
+        
+        self.library_tabs.addTab(tab_discovery, "🧠 Discovery Feed")
+        
+        # ----------------------------------------------------
+        # Tab 2: Most Listened
+        # ----------------------------------------------------
+        tab_most_listened = QWidget()
+        ml_layout = QVBoxLayout()
+        ml_layout.setContentsMargins(20, 20, 20, 20)
+        ml_layout.setSpacing(15)
+        tab_most_listened.setLayout(ml_layout)
+        
+        self.table_most_listened = QTableWidget()
+        self.table_most_listened.setColumnCount(4)
+        self.table_most_listened.setHorizontalHeaderLabels(["Track Name", "Artist", "Play Count", "Last Played"])
+        self.table_most_listened.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table_most_listened.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table_most_listened.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_most_listened.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.table_most_listened.verticalHeader().setVisible(False)
+        self.table_most_listened.setStyleSheet("""
+            QTableWidget {
+                background-color: #121212;
+                gridline-color: #1E1E1E;
+                color: white;
+                border: 1px solid #1E1E1E;
+                border-radius: 6px;
+            }
+            QTableWidget::item {
+                padding: 10px;
+            }
+            QHeaderView::section {
+                background-color: #1A1A1A;
+                color: #B3B3B3;
+                padding: 8px;
+                border: none;
+                font-weight: bold;
+            }
+        """)
+        ml_layout.addWidget(self.table_most_listened)
+        
+        self.library_tabs.addTab(tab_most_listened, "📈 Most Listened")
+        
+        # ----------------------------------------------------
+        # Tab 3: All Tracks
+        # ----------------------------------------------------
+        tab_all_tracks = QWidget()
+        all_layout = QVBoxLayout()
+        all_layout.setContentsMargins(20, 20, 20, 20)
+        all_layout.setSpacing(15)
+        tab_all_tracks.setLayout(all_layout)
+        
         header = QHBoxLayout()
         
         self.lbl_lib_title = QLabel("Scanned Music Library")
@@ -2018,7 +2445,25 @@ class MozZzartPlayerApp(QMainWindow):
         
         header.addStretch()
         
-        # Moved and Restyled Bulk Process Button
+        self.btn_add_song = QPushButton("Add Song")
+        self.btn_add_song.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_add_song.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(30, 30, 30, 0.85);
+                color: #F0C419;
+                border-radius: 18px;
+                padding: 8px 18px;
+                font-weight: bold;
+                border: 1px solid rgba(240, 196, 25, 0.5);
+            }
+            QPushButton:hover {
+                background-color: rgba(240, 196, 25, 0.15);
+                border: 1px solid rgba(240, 196, 25, 0.9);
+            }
+        """)
+        self.btn_add_song.clicked.connect(self.add_song_from_dialog)
+        header.addWidget(self.btn_add_song)
+        
         self.btn_bulk_karaoke = QPushButton("Bulk Process Karaoke Sync")
         self.btn_bulk_karaoke.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_bulk_karaoke.setStyleSheet("""
@@ -2037,50 +2482,104 @@ class MozZzartPlayerApp(QMainWindow):
         self.btn_bulk_karaoke.clicked.connect(self.run_bulk_karaoke_processing)
         header.addWidget(self.btn_bulk_karaoke)
         
-        # Search Filter Bar
+        self.btn_bulk_toggle = QPushButton("Missing")
+        self.btn_bulk_toggle.setCheckable(True)
+        self.btn_bulk_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_bulk_toggle.setStyleSheet("""
+            QPushButton {
+                background-color: #2b2b2b;
+                color: #b3b3b3;
+                border-radius: 18px;
+                padding: 8px 18px;
+                font-weight: bold;
+                border: 1px solid #444;
+            }
+            QPushButton:checked {
+                background-color: #F0C419;
+                color: #000000;
+                border: 1px solid #D4A017;
+            }
+        """)
+        self.btn_bulk_toggle.toggled.connect(self.on_bulk_toggle_changed)
+        header.addWidget(self.btn_bulk_toggle)
+        
+        # Sort ComboBox
+        self.sort_label = QLabel("Sort By:")
+        self.sort_label.setStyleSheet("color: #B3B3B3; font-weight: bold; font-size: 12px; margin-left: 10px;")
+        header.addWidget(self.sort_label)
+        
+        self.combo_sort = QComboBox()
+        self.combo_sort.addItems(["Alphabetical (A-Z)", "Favorites First", "Newly Added"])
+        self.combo_sort.setStyleSheet("""
+            QComboBox {
+                background-color: #1A1A1A;
+                color: white;
+                border: 1px solid #333;
+                border-radius: 6px;
+                padding: 6px 12px;
+                min-width: 140px;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QComboBox:hover {
+                border: 1px solid #F0C419;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+        """)
+        self.combo_sort.currentIndexChanged.connect(self.on_sort_changed)
+        header.addWidget(self.combo_sort)
+        
         self.search_filter = QLineEdit()
         self.search_filter.setPlaceholderText("🔍 Search tracks by name...")
-        self.search_filter.setFixedWidth(250)
+        self.search_filter.setFixedWidth(220)
         self.search_filter.textChanged.connect(self.filter_library_table)
         header.addWidget(self.search_filter)
         
-        layout.addLayout(header)
+        all_layout.addLayout(header)
         
-        # Drop hint label at the bottom
         drop_hint = QLabel("💿 Drag & drop .mp3 / .wav files directly onto the table to import them into the active playlist")
         drop_hint.setStyleSheet("color: #555555; font-size: 11px; padding: 4px 0px;")
         drop_hint.setWordWrap(True)
-        layout.addWidget(drop_hint)
+        all_layout.addWidget(drop_hint)
         
-        # Table of Tracks
         self.table_songs = DropTableWidget()
-        self.table_songs.setColumnCount(4)
-        self.table_songs.setHorizontalHeaderLabels(["Track Name", "Edit Lyrics", "Lyrics Synced", "Actions"])
-        self.table_songs.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.table_songs.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.table_songs.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_songs.setColumnCount(7)
+        self.table_songs.setHorizontalHeaderLabels(["⭐", "Track Name", "Date Added", "Language", "Edit Lyrics", "Lyrics Synced", "Actions"])
+        self.table_songs.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.table_songs.setColumnWidth(0, 40)
+        self.table_songs.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table_songs.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.table_songs.setColumnWidth(2, 120)
         self.table_songs.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.table_songs.setColumnWidth(3, 200)
+        self.table_songs.setColumnWidth(3, 120)
+        self.table_songs.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_songs.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self.table_songs.setColumnWidth(5, 150)
+        self.table_songs.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        self.table_songs.setColumnWidth(6, 200)
         self.table_songs.verticalHeader().setVisible(False)
         self.table_songs.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table_songs.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table_songs.cellDoubleClicked.connect(self.on_table_row_double_click)
+        self.table_songs.cellClicked.connect(self.on_library_cell_clicked)
         self.table_songs.files_dropped.connect(self.handle_dropped_files)
-        layout.addWidget(self.table_songs)
+        all_layout.addWidget(self.table_songs)
         
-        # Bottom Bulk Process Panel
         bulk_layout = QHBoxLayout()
         bulk_layout.setContentsMargins(0, 10, 0, 0)
         
         self.lbl_root_status = QLabel("Music Folder: Loaded")
         self.lbl_root_status.setStyleSheet("color: #888888; font-size: 12px;")
         bulk_layout.addWidget(self.lbl_root_status)
-        
         bulk_layout.addStretch()
         
-
+        all_layout.addLayout(bulk_layout)
         
-        layout.addLayout(bulk_layout)
+        self.library_tabs.addTab(tab_all_tracks, "🎵 All Tracks")
+        self.library_tabs.setCurrentIndex(2)  # Default to All Tracks tab
+        layout.addWidget(self.library_tabs)
         
         self.content_stack.addWidget(page)
 
@@ -2142,17 +2641,153 @@ class MozZzartPlayerApp(QMainWindow):
 
     def populate_library_table(self, song_list):
         """Populates the table with details and buttons."""
+        import analytics
+        from PyQt6.QtGui import QColor, QFont
+        
+        # Work on a copy of the list to prevent unexpected side effects on the master collection
+        song_list = list(song_list)
+        
+        # Apply sorting logic
+        if hasattr(self, 'combo_sort'):
+            sort_opt = self.combo_sort.currentText()
+            if sort_opt == "Favorites First":
+                def sort_key(s):
+                    is_fav = analytics.is_track_favorite(s["path"])
+                    return (0 if is_fav else 1, s["name"].lower())
+                self.scanned_songs.sort(key=sort_key)
+                song_list.sort(key=sort_key)
+            elif sort_opt == "Newly Added":
+                def sort_key_new(s):
+                    try:
+                        import os
+                        return -os.path.getctime(s["path"])
+                    except Exception:
+                        return 0
+                self.scanned_songs.sort(key=sort_key_new)
+                song_list.sort(key=sort_key_new)
+            else:
+                self.scanned_songs.sort(key=lambda s: s["name"].lower())
+                song_list.sort(key=lambda s: s["name"].lower())
+        else:
+            self.scanned_songs.sort(key=lambda s: s["name"].lower())
+            song_list.sort(key=lambda s: s["name"].lower())
+
         self.table_songs.setRowCount(len(song_list))
         
         for idx, song in enumerate(song_list):
             self.table_songs.setRowHeight(idx, 50)
             
-            title_item = QTableWidgetItem(song["name"])
-            title_item.setFlags(title_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            title_item.setForeground(Qt.GlobalColor.white)
-            self.table_songs.setItem(idx, 0, title_item)
+            # 0. Favorites Column (Index 0)
+            is_fav = analytics.is_track_favorite(song["path"])
+            fav_char = "★" if is_fav else "☆"
+            fav_item = QTableWidgetItem(fav_char)
+            fav_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            fav_item.setFlags(fav_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             
-            btn_correct = QPushButton("📝 Edit")
+            # Use custom QLabel as cell widget so the QSS stylesheet selection/hover rules
+            # do not override the yellow (favorited) or white (unfavorited) color of the star!
+            fav_label = QLabel(fav_char)
+            fav_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            fav_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            
+            font = fav_label.font()
+            font.setPointSize(16)
+            font.setBold(True)
+            fav_label.setFont(font)
+            
+            if is_fav:
+                fav_label.setStyleSheet("color: #F0C419; background-color: transparent;")
+            else:
+                fav_label.setStyleSheet("color: #FFFFFF; background-color: transparent;")
+                
+            # Store path and name in item user roles
+            fav_item.setData(Qt.ItemDataRole.UserRole, song["path"])
+            fav_item.setData(Qt.ItemDataRole.UserRole + 1, song["name"])
+            
+            self.table_songs.setItem(idx, 0, fav_item)
+            self.table_songs.setCellWidget(idx, 0, fav_label)
+            
+            # 1. Track Name Column (Index 1)
+            title_item = QTableWidgetItem("")
+            title_item.setFlags(title_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            title_item.setForeground(Qt.GlobalColor.transparent)
+            self.table_songs.setItem(idx, 1, title_item)
+            
+            # Wrap in custom QLabel cell widget to override QSS styles during active pulse highlighting!
+            title_label = QLabel(song["name"])
+            title_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            title_label.setStyleSheet("background-color: transparent;") # Inherit parents style by default
+            font = title_item.font()
+            title_label.setFont(font)
+            self.table_songs.setCellWidget(idx, 1, title_label)
+            
+            # 2. Date Added Column (Index 2)
+            import datetime
+            try:
+                ctime = os.path.getctime(song["path"])
+                added_time = datetime.datetime.fromtimestamp(ctime)
+            except Exception:
+                added_time = datetime.datetime.now()
+            
+            date_str = added_time.strftime("%b %d, %Y")  # e.g., "Jan 01, 2026"
+            date_item = QTableWidgetItem(date_str)
+            date_item.setFlags(date_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            date_item.setForeground(QColor("#888888"))
+            date_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table_songs.setItem(idx, 2, date_item)
+            
+            # 3. Language Column (Index 3)
+            saved_track_lang = analytics.get_track_language(song["path"])
+            combo_lang = NoScrollComboBox()
+            combo_lang.addItems(["Auto-Detect"] + WHISPER_LANGUAGES)
+            
+            # Match the active language selection
+            if saved_track_lang:
+                # Find matching index ignoring case
+                match_idx = 0
+                for i in range(1, combo_lang.count()):
+                    if combo_lang.itemText(i).lower() == saved_track_lang:
+                        match_idx = i
+                        break
+                combo_lang.setCurrentIndex(match_idx)
+            else:
+                combo_lang.setCurrentIndex(0)
+                
+            # Premium Dark Style Sheet
+            combo_lang.setStyleSheet("""
+                QComboBox {
+                    background-color: transparent;
+                    color: #B3B3B3;
+                    border: none;
+                    font-weight: bold;
+                    font-size: 11px;
+                    padding: 4px;
+                }
+                QComboBox:hover {
+                    color: #F0C419;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #181818;
+                    color: #B3B3B3;
+                    selection-background-color: #282828;
+                    selection-color: #F0C419;
+                    border: 1px solid #282828;
+                }
+            """)
+            
+            # Save selection on change
+            def make_lang_saver(path):
+                return lambda text: analytics.set_track_language(path, text)
+            combo_lang.currentTextChanged.connect(make_lang_saver(song["path"]))
+            
+            self.table_songs.setCellWidget(idx, 3, combo_lang)
+            
+            # 4. Edit Lyrics Button (Index 4)
+            btn_correct = QPushButton("Edit")
             btn_correct.setCursor(Qt.CursorShape.PointingHandCursor)
             
             if song["has_karaoke"]:
@@ -2185,9 +2820,9 @@ class MozZzartPlayerApp(QMainWindow):
                     }
                 """)
                 
-            self.table_songs.setCellWidget(idx, 1, btn_correct)
+            self.table_songs.setCellWidget(idx, 4, btn_correct)
             
-            # Resolve live sync state for this track
+            # 5. Resolve live sync state for this track (Index 5)
             sync_status = self._get_song_sync_status(song["path"])
             
             btn_badge = QPushButton()
@@ -2196,7 +2831,7 @@ class MozZzartPlayerApp(QMainWindow):
             btn_instr = QPushButton("🎸")
             
             if sync_status == "syncing":
-                btn_badge.setText("⚡ Syncing...")
+                btn_badge.setText("Syncing... 0%")
                 btn_badge.setStyleSheet("""
                     QPushButton {
                         color: #F0C419;
@@ -2224,7 +2859,7 @@ class MozZzartPlayerApp(QMainWindow):
                 btn_badge.setEnabled(False)
                 btn_badge.setCursor(Qt.CursorShape.ForbiddenCursor)
             elif song["has_karaoke"]:
-                btn_badge.setText("🎤 Glow Sync")
+                btn_badge.setText("Karaoke Sync")
                 btn_badge.setStyleSheet("""
                     QPushButton {
                         color: #F0C419;
@@ -2259,7 +2894,7 @@ class MozZzartPlayerApp(QMainWindow):
             if sync_status == "none":
                 def make_trigger(s, btn, btn_i):
                     def trigger():
-                        btn.setText("⚡ Syncing..." if not self.karaoke_queue else "⏳ Queue")
+                        btn.setText("Syncing... 0%" if not self.karaoke_queue else "⏳ Queue")
                         btn.setStyleSheet("""
                             QPushButton {
                                 color: #F0C419;
@@ -2283,8 +2918,9 @@ class MozZzartPlayerApp(QMainWindow):
                     return trigger
                 btn_badge.clicked.connect(make_trigger(song, btn_badge, btn_instr))
             
-            self.table_songs.setCellWidget(idx, 2, btn_badge)
+            self.table_songs.setCellWidget(idx, 5, btn_badge)
             
+            # 6. Actions Panel (Index 6)
             actions_layout = QHBoxLayout()
             actions_layout.setContentsMargins(2, 2, 2, 2)
             actions_layout.setSpacing(5)
@@ -2314,7 +2950,7 @@ class MozZzartPlayerApp(QMainWindow):
                             btn_i.setStyleSheet("padding: 4px 8px; font-size: 10px; max-width: 25px; border-radius: 12px; background-color: #222222; color: #888888;")
                             btn_i.setToolTip("Extracting instrumental...")
                             
-                            btn_b.setText("⚡ Syncing..." if not self.karaoke_queue else "⏳ Queue")
+                            btn_b.setText("Syncing... 0%" if not self.karaoke_queue else "⏳ Queue")
                             btn_b.setStyleSheet("""
                                 QPushButton {
                                     color: #F0C419;
@@ -2336,7 +2972,7 @@ class MozZzartPlayerApp(QMainWindow):
             
             container = QWidget()
             container.setLayout(actions_layout)
-            self.table_songs.setCellWidget(idx, 3, container)
+            self.table_songs.setCellWidget(idx, 6, container)
 
     def filter_library_table(self, query):
         """Dynamically filters the library list in real time."""
@@ -2344,12 +2980,201 @@ class MozZzartPlayerApp(QMainWindow):
         filtered = [s for s in self.scanned_songs if query in s["name"].lower()]
         self.populate_library_table(filtered)
 
+    def on_library_cell_clicked(self, row, column):
+        """Called when a cell in the main library table is clicked."""
+        if column == 0:
+            fav_item = self.table_songs.item(row, 0)
+            if fav_item:
+                track_path = fav_item.data(Qt.ItemDataRole.UserRole)
+                song_name = fav_item.data(Qt.ItemDataRole.UserRole + 1)
+                if track_path:
+                    import analytics
+                    from PyQt6.QtGui import QColor
+                    artist, title = analytics.parse_track_meta(track_path)
+                    is_now_fav = analytics.toggle_favorite(track_path, title, artist)
+                    
+                    # Update visually in place (both underlying item and QLabel cell widget)
+                    if is_now_fav:
+                        fav_item.setText("★")
+                        fav_item.setForeground(QColor("#F0C419"))
+                    else:
+                        fav_item.setText("☆")
+                        fav_item.setForeground(QColor("#FFFFFF"))
+                        
+                    fav_label = self.table_songs.cellWidget(row, 0)
+                    if not isinstance(fav_label, QLabel):
+                        fav_label = QLabel()
+                        fav_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                        fav_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                        font = fav_label.font()
+                        font.setPointSize(16)
+                        font.setBold(True)
+                        fav_label.setFont(font)
+                        self.table_songs.setCellWidget(row, 0, fav_label)
+                        
+                    if is_now_fav:
+                        fav_label.setText("★")
+                        fav_label.setStyleSheet("color: #F0C419; background-color: transparent;")
+                    else:
+                        fav_label.setText("☆")
+                        fav_label.setStyleSheet("color: #FFFFFF; background-color: transparent;")
+                        
+                    # If sorted by 'Favorites First', changing active favorites status should trigger a visual sorting update!
+                    # But wait: only do this if it was unfavorited so it doesn't interrupt active clicking, or let's just let it stay until manual refresh to prevent popping rows away while clicking! That's the most polished UX.
+                    # Yes, keeping it in place is very clean, and next scan/sort refresh will sort correctly.
+
+    def on_sort_changed(self):
+        """Re-populates the library table based on the selected sort criteria."""
+        query = self.search_filter.text().strip()
+        if query:
+            self.filter_library_table(query)
+        else:
+            self.populate_library_table(self.scanned_songs)
+
+    def delete_selected_track(self):
+        """Sends the selected track and all its associated stem/JSON files to the Recycle Bin and purges database records."""
+        row = self.table_songs.currentRow()
+        if row < 0 or row >= self.table_songs.rowCount():
+            return
+            
+        fav_item = self.table_songs.item(row, 0)
+        if not fav_item:
+            return
+            
+        track_path = fav_item.data(Qt.ItemDataRole.UserRole)
+        song_name = fav_item.data(Qt.ItemDataRole.UserRole + 1)
+        
+        if not track_path or not os.path.exists(track_path):
+            return
+            
+        # Prompt user for confirmation
+        reply = QMessageBox.question(
+            self, "Delete Track",
+            f"Are you sure you want to send '{song_name}' to the Recycle Bin?\n\nThis will permanently delete the song file and clear all its playlist and play count analytics from the database.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+            
+        logger.info(f"User confirmed deletion of: {track_path}")
+        
+        # Stop playback if the track is currently playing
+        if self.player.current_track == track_path or (hasattr(self, 'original_track_path') and self.original_track_path == track_path):
+            logger.info("Stopping playback as the currently active track is being deleted.")
+            self.player.stop()
+            self.btn_play_pause.setIcon(qta.icon('fa5s.play', color='#F0C419'))
+            # Reset now playing info visually
+            if hasattr(self, 'song_title_label'):
+                self.song_title_label.setText("No Track Playing")
+            if hasattr(self, 'artist_label'):
+                self.artist_label.setText("Select a song to start")
+            if hasattr(self, 'timeline_slider'):
+                self.timeline_slider.setValue(0)
+            if hasattr(self, 'lbl_time_curr'):
+                self.lbl_time_curr.setText("0:00")
+            if hasattr(self, 'lbl_time_max'):
+                self.lbl_time_max.setText("0:00")
+                
+        # Get associated stems and JSON files to clean them up too
+        files_to_delete = [track_path]
+        json_path = os.path.splitext(track_path)[0] + ".json"
+        if os.path.isfile(json_path):
+            files_to_delete.append(json_path)
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                instr_path = data.get("instrumental_path")
+                if instr_path and os.path.isfile(instr_path):
+                    files_to_delete.append(instr_path)
+                vocal_path = data.get("vocal_path")
+                if vocal_path and os.path.isfile(vocal_path):
+                    files_to_delete.append(vocal_path)
+            except Exception as e:
+                logger.warning(f"Failed to read associated stems from {json_path}: {e}")
+                
+        # Send files to Windows Recycle Bin using ctypes to avoid external dependencies
+        import ctypes
+        from ctypes import wintypes
+        
+        class SHFILEOPSTRUCTW(ctypes.Structure):
+            _fields_ = [
+                ("hwnd", wintypes.HWND),
+                ("wFunc", wintypes.UINT),
+                ("pFrom", wintypes.LPCWSTR),
+                ("pTo", wintypes.LPCWSTR),
+                ("fFlags", ctypes.c_ushort),
+                ("fAnyOperationsAborted", wintypes.BOOL),
+                ("hNameMappings", wintypes.LPVOID),
+                ("lpszProgressTitle", wintypes.LPCWSTR),
+            ]
+            
+        FO_DELETE = 3
+        FOF_ALLOWUNDO = 0x0040
+        FOF_NOCONFIRMATION = 0x0010
+        FOF_SILENT = 0x0004
+        
+        def win_trash(path):
+            path_abs = os.path.abspath(path)
+            if not os.path.exists(path_abs):
+                return True
+            path_buffer = path_abs + "\0\0"
+            fileop = SHFILEOPSTRUCTW()
+            fileop.hwnd = None
+            fileop.wFunc = FO_DELETE
+            fileop.pFrom = path_buffer
+            fileop.pTo = None
+            fileop.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT
+            fileop.fAnyOperationsAborted = False
+            fileop.hNameMappings = None
+            fileop.lpszProgressTitle = None
+            result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(fileop))
+            return result == 0
+            
+        deletion_success = True
+        for path in files_to_delete:
+            if os.path.exists(path):
+                ok = win_trash(path)
+                if ok:
+                    logger.info(f"Sent to Recycle Bin: {path}")
+                else:
+                    logger.warning(f"Failed to send to Recycle Bin: {path}, attempting standard delete.")
+                    try:
+                        os.remove(path)
+                        logger.info(f"Standard deleted: {path}")
+                    except Exception as err:
+                        logger.error(f"Failed to delete file {path}: {err}")
+                        deletion_success = False
+                        
+        # Delete database persistent records
+        import analytics
+        db_ok = analytics.delete_track_data(track_path)
+        if db_ok:
+            logger.info("Cleared database records for deleted track.")
+        else:
+            logger.error("Failed to clear database records for deleted track.")
+            
+        # Re-scan the library folder to refresh scanned_songs and library table!
+        self.scan_music_library()
+                
+        QMessageBox.information(
+            self, "Track Deleted",
+            f"Successfully deleted '{song_name}' and cleared its database records."
+        )
+
     def on_table_row_double_click(self, row, column):
         self.play_selected_table_row(row)
 
     def play_selected_table_row(self, row):
         """Plays the song corresponding to the selected table row."""
-        song_name = self.table_songs.item(row, 0).text()
+        title_widget = self.table_songs.cellWidget(row, 1)
+        if isinstance(title_widget, QLabel):
+            song_name = title_widget.text()
+        else:
+            item = self.table_songs.item(row, 1)
+            song_name = item.text() if item else ""
+            
         matching_song = None
         for s in self.scanned_songs:
             if s["name"] == song_name:
@@ -2386,6 +3211,54 @@ class MozZzartPlayerApp(QMainWindow):
             self.scan_music_library()
         if skipped:
             logger.info(f"Skipped {len(skipped)} file(s) already in target directory.")
+
+    def add_song_from_dialog(self):
+        """Allows users to search directory and add audio files (.mp3, .wav) to the active playlist."""
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        import shutil
+        
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Audio Files to Add",
+            "",
+            "Audio Files (*.mp3 *.wav)"
+        )
+        
+        if not file_paths:
+            return
+            
+        root_dir = self.config["music_root_dir"]
+        target_dir = root_dir if self.active_playlist == "Library" else os.path.join(root_dir, self.active_playlist)
+        os.makedirs(target_dir, exist_ok=True)
+        
+        imported = []
+        skipped = []
+        for src_path in file_paths:
+            filename = os.path.basename(src_path)
+            dest_path = os.path.join(target_dir, filename)
+            if os.path.abspath(src_path) == os.path.abspath(dest_path):
+                skipped.append(filename)
+                continue
+            try:
+                shutil.copy2(src_path, dest_path)
+                imported.append(filename)
+                logger.info(f"Imported song via button: {src_path} -> {dest_path}")
+            except Exception as e:
+                logger.error(f"Failed to copy song {src_path}: {e}")
+                
+        if imported:
+            QMessageBox.information(
+                self, 
+                "Success", 
+                f"Successfully added {len(imported)} song(s) to the library."
+            )
+            self.scan_music_library()
+        if skipped:
+            QMessageBox.warning(
+                self,
+                "Warning",
+                f"Skipped {len(skipped)} file(s) that were already in the target folder."
+            )
 
     def _check_song_has_instrumental(self, song):
         """Checks if a song already has an extracted instrumental file."""
@@ -2437,6 +3310,9 @@ class MozZzartPlayerApp(QMainWindow):
             self.active_playlist = "Library"
         else:
             self.active_playlist = text.replace("📁 ", "")
+            
+        if hasattr(self, 'library_tabs'):
+            self.library_tabs.setCurrentIndex(2)
             
         logger.info(f"Switched playlist filter to: {self.active_playlist}")
         self.scan_music_library()
@@ -2979,7 +3855,7 @@ class MozZzartPlayerApp(QMainWindow):
         self.vocal_guide_widget = QWidget()
         vg_layout = QHBoxLayout()
         vg_layout.setContentsMargins(0, 0, 0, 0)
-        vg_layout.setSpacing(6)
+        vg_layout.setSpacing(4)
         self.vocal_guide_widget.setLayout(vg_layout)
         
         vg_lbl = QLabel("🎤 Guide Vol:")
@@ -3120,7 +3996,7 @@ class MozZzartPlayerApp(QMainWindow):
             is_paused = False
             if hasattr(self, 'player') and self.player:
                 is_paused = not getattr(self.player, 'is_playing', lambda: False)()
-            self.btn_edit_lyrics.setEnabled(is_paused)
+            self.btn_edit_lyrics.setEnabled(is_paused and not getattr(self, 'karaoke_mode_active', False))
         
         # Clear previous labels
         while self.lyrics_layout.count():
@@ -3239,6 +4115,8 @@ class MozZzartPlayerApp(QMainWindow):
             self.is_editing_lyrics = True
             self.btn_edit_lyrics.setText("💾 Save Lyrics")
             self.btn_edit_lyrics.setStyleSheet("background-color: #F0C419; color: #000000; padding: 8px 16px; font-weight: bold; border-radius: 4px;")
+            if hasattr(self, 'btn_full_karaoke'):
+                self.btn_full_karaoke.setEnabled(False)
 
             # Transform QLabels into editable QLineEdits
             for idx in range(self.lyrics_layout.count()):
@@ -3258,6 +4136,8 @@ class MozZzartPlayerApp(QMainWindow):
             self.is_editing_lyrics = False
             self.btn_edit_lyrics.setText("✏️ Edit Lyrics")
             self.btn_edit_lyrics.setStyleSheet("background-color: #1A1A1A; color: #B3B3B3; padding: 8px 16px; font-weight: bold; border-radius: 4px;")
+            if hasattr(self, 'btn_full_karaoke'):
+                self.btn_full_karaoke.setEnabled(True)
 
             changed = False
             for idx in range(self.lyrics_layout.count()):
@@ -3383,13 +4263,40 @@ class MozZzartPlayerApp(QMainWindow):
             
         logger.warning("==================================================")
 
+    def closeEvent(self, event):
+        """Ensures background Demucs subprocesses are hard-killed on application exit."""
+        if hasattr(self, 'active_karaoke_worker') and self.active_karaoke_worker:
+            logger.info("Application closing: Terminating active background karaoke worker.")
+            # Trigger the new teardown method defined in the markdown plan
+            if hasattr(self.active_karaoke_worker, 'terminate_process'):
+                self.active_karaoke_worker.terminate_process()
+        super().closeEvent(event)
+
     def keyPressEvent(self, event):
+        # AI Diagnostic Dump Hook (Secured: Dev Mode Only)
+        if IS_DEV_MODE and event.key() == Qt.Key.Key_D and event.modifiers() == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+            try:
+                dump = self.player.dump_debug_state()
+                with open("agent_debug.log", "w") as f:
+                    f.write(dump)
+                QMessageBox.information(self, "Diagnostics", "AI Diagnostic State dumped to agent_debug.log")
+            except Exception as e:
+                logger.error(f"Diagnostic dump failed: {e}")
+            return
+            
         # Allow pressing 'Escape' to cleanly exit fullscreen
         if event.key() == Qt.Key.Key_Escape and getattr(self, "is_fullscreen", False):
             self.toggle_karaoke_fullscreen()
         # Fire Layout Debug manually on F12
         elif event.key() == Qt.Key.Key_F12:
             self.dump_layout_debug()
+        # Delete key hook to send selected track in all tracks tab to trash
+        elif event.key() == Qt.Key.Key_Delete:
+            if hasattr(self, 'library_tabs') and self.library_tabs.currentIndex() == 2:
+                selected_ranges = self.table_songs.selectedRanges()
+                if selected_ranges:
+                    self.delete_selected_track()
+                    return
         # OS Media Key hooks for laptop playback buttons
         # Windows keyboards send Key_MediaTogglePlayPause (not Key_MediaPlay/Key_MediaPause)
         elif event.key() in (Qt.Key.Key_MediaPlay, Qt.Key.Key_MediaPause, Qt.Key.Key_MediaTogglePlayPause):
@@ -3491,17 +4398,11 @@ class MozZzartPlayerApp(QMainWindow):
         lang_lbl.setStyleSheet("font-weight: bold; color: #B3B3B3; font-size: 12px; margin-top: 10px;")
         lang_row.addWidget(lang_lbl)
         
-        self.combo_whisper_lang = QComboBox()
+        self.combo_whisper_lang = NoScrollComboBox()
         self.combo_whisper_lang.setObjectName("WhisperLangCombo")
-        self._whisper_lang_map = [
-            ("Auto-Detect (Default)", None),
-            ("English", "en"),
-            ("Japanese", "ja"),
-            ("Filipino / Tagalog", "tl"),
-            ("Dutch", "nl"),
-            ("Spanish", "es"),
-            ("Korean", "ko"),
-        ]
+        self._whisper_lang_map = [("Auto-Detect (Default)", None)]
+        for lang in WHISPER_LANGUAGES:
+            self._whisper_lang_map.append((lang, lang.lower()))
         for display_name, _code in self._whisper_lang_map:
             self.combo_whisper_lang.addItem(display_name)
         
@@ -3727,6 +4628,59 @@ class MozZzartPlayerApp(QMainWindow):
         gif_layout.addWidget(gif_desc)
         
         layout.addWidget(gif_box)
+
+        # AI Discovery & Playback Analytics Settings
+        ai_box = QFrame()
+        ai_box.setStyleSheet("background-color: #121212; border: 1px solid #1E1E1E; border-radius: 8px; padding: 15px; margin-top: 15px;")
+        ai_layout = QVBoxLayout()
+        ai_box.setLayout(ai_layout)
+        
+        ai_layout.addWidget(QLabel("🧠 AI DISCOVERY ENGINE (BYOK)"))
+        
+        # Gemini API Key Field Row
+        key_row = QHBoxLayout()
+        key_lbl = QLabel("Gemini API Key:")
+        key_lbl.setStyleSheet("font-weight: bold; color: #B3B3B3; font-size: 12px;")
+        key_row.addWidget(key_lbl)
+        
+        self.txt_gemini_key = QLineEdit(self.config.get("gemini_api_key", ""))
+        self.txt_gemini_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.txt_gemini_key.setStyleSheet("background-color: #1C1C1C; border-radius: 6px; padding: 8px 12px; color: white;")
+        self.txt_gemini_key.editingFinished.connect(self.on_gemini_key_changed)
+        key_row.addWidget(self.txt_gemini_key, stretch=1)
+        
+        ai_layout.addLayout(key_row)
+        
+        ai_desc = QLabel("Enter your personal Google Gemini API Key. The 'Discover Weekly' recommender uses the free Gemini 3.5 Flash API to customize your feed. Your key is stored locally in config.json.")
+        ai_desc.setWordWrap(True)
+        ai_desc.setStyleSheet("color: #888888; font-size: 11px; margin-top: 2px; margin-bottom: 8px;")
+        ai_layout.addWidget(ai_desc)
+        
+        # Reset AI Discovery History Button (Amendment 3)
+        self.btn_reset_ai = QPushButton("Reset AI Discovery History")
+        self.btn_reset_ai.setStyleSheet("""
+            QPushButton {
+                background-color: #1A1A1A;
+                color: #FF5555;
+                border: 1px solid #FF5555;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #3A0000;
+                color: #FF8888;
+            }
+        """)
+        self.btn_reset_ai.clicked.connect(self.reset_ai_discovery_history)
+        
+        reset_row = QHBoxLayout()
+        reset_row.addWidget(self.btn_reset_ai)
+        reset_row.addStretch()
+        ai_layout.addLayout(reset_row)
+        
+        layout.addWidget(ai_box)
         layout.addStretch()
         
         # 2. Mount the page into the scroll area, then add the scroll area to the stack
@@ -3830,6 +4784,34 @@ class MozZzartPlayerApp(QMainWindow):
         self.update_mock_toggle_btn_text()
         logger.info(f"Mock mode toggled to: {self.config['use_mock_karaoke']}")
 
+    def on_gemini_key_changed(self):
+        """Saves the Gemini API key to config."""
+        key = self.txt_gemini_key.text().strip()
+        self.config["gemini_api_key"] = key
+        config.save_config(self.config)
+        logger.info("Gemini API Key updated in config.")
+
+    def reset_ai_discovery_history(self):
+        """Clears all logged recommendation history in the database."""
+        try:
+            import analytics
+            success = analytics.clear_recommendation_history()
+            if success:
+                QMessageBox.information(
+                    self,
+                    "AI Reset Successful",
+                    "Your AI Discovery History has been successfully cleared! The recommender will start completely fresh."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "AI Reset Failed",
+                    "Could not clear recommendation history. Check app logs for details."
+                )
+        except Exception as e:
+            logger.error(f"Error resetting AI discovery history: {e}")
+            QMessageBox.critical(self, "Error", f"An error occurred while resetting history: {str(e)}")
+
     def check_and_update_ytdlp_binary(self):
         self.btn_update_ytdl.setEnabled(False)
         self.btn_update_ytdl.setText("Updating...")
@@ -3856,7 +4838,9 @@ class MozZzartPlayerApp(QMainWindow):
     # ==========================
     def update_playback_polling(self):
         """Invoked every 100ms. Refreshes timeline sliders and word highlights."""
-        if not self.player.is_playing():
+        # Polling is also required if the player is active but paused during stream-rebuild transitions
+        # to ensure that deferred seeks and pauses are applied.
+        if not self.player.is_playing() and not getattr(self.player, '_pending_seek', None) and not getattr(self.player, '_pending_pause', False) and not getattr(self.player, '_vocal_pending_seek', None):
             return
         self.player.update_polling()
 
@@ -3878,11 +4862,13 @@ class MozZzartPlayerApp(QMainWindow):
             self.btn_play_pause.setIcon(qta.icon('fa5s.play', color='#F0C419'))
             self.mini_player.update_play_state(False)
             if hasattr(self, 'btn_edit_lyrics'):
-                self.btn_edit_lyrics.setEnabled(True)
+                self.btn_edit_lyrics.setEnabled(not getattr(self, 'karaoke_mode_active', False))
             # Freeze/pause Mozarts if in fullscreen
             if getattr(self, "is_fullscreen", False):
                 if hasattr(self, 'mozart_left'): self.mozart_left.stop()
                 if hasattr(self, 'mozart_right'): self.mozart_right.stop()
+            if state == "stopped":
+                self.pulse_currently_playing_row(0)
 
     def on_duration_resolved(self, duration):
         """Sets slider range limits."""
@@ -3904,9 +4890,49 @@ class MozZzartPlayerApp(QMainWindow):
         # Refresh lyrics highlighted words
         self.update_karaoke_visuals(position)
         
+        # Highlight and pulse the currently playing song in the library table
+        self.pulse_currently_playing_row(position)
+        
         # LIVE CLOCK SYNC: Send continuous time updates to the web server fast-path
         if hasattr(self, 'web_remote_worker') and self.web_remote_worker and self.web_remote_worker.isRunning():
             self.web_remote_worker.update_clock(position)
+
+    def pulse_currently_playing_row(self, position):
+        """Highlights the currently playing song row in table_songs with a subtle pulse effect synced to a simulated 120 BPM beat."""
+        if not hasattr(self, 'table_songs'):
+            return
+            
+        import math
+        from PyQt6.QtWidgets import QLabel
+        
+        current_track = self.player.current_track
+        
+        # Calculate pulse intensity (0.0 to 1.0) synced to 120 BPM (2 beats/sec)
+        bps = 120.0 / 60.0
+        angle = 2.0 * math.pi * bps * position
+        pulse = 0.5 + 0.5 * math.cos(angle)
+        
+        # Interpolate between pure white (255, 255, 255) and bright gold (240, 196, 25)
+        r = int(255 - (255 - 240) * pulse)
+        g = int(255 - (255 - 196) * pulse)
+        b = int(255 - (255 - 25) * pulse)
+        pulse_hex = f"#{r:02x}{g:02x}{b:02x}"
+        
+        for row in range(self.table_songs.rowCount()):
+            fav_item = self.table_songs.item(row, 0)
+            if not fav_item:
+                continue
+            path = fav_item.data(Qt.ItemDataRole.UserRole)
+            title_label = self.table_songs.cellWidget(row, 1)
+            if not isinstance(title_label, QLabel):
+                continue
+                
+            if current_track and path == current_track:
+                # Active playing track: apply pulse color and bold font
+                title_label.setStyleSheet(f"color: {pulse_hex}; font-weight: bold; background-color: transparent;")
+            else:
+                # Inactive tracks: reset to parent inheritance (transparent background, no explicit color rule)
+                title_label.setStyleSheet("background-color: transparent;")
 
     def on_timeline_seek(self, value):
         self.player.seek(float(value))
@@ -4250,10 +5276,38 @@ X-GNOME-Autostart-enabled=true"""
             list_item.setSizeHint(QSize(100, 60))
             self.sync_queue_list.setItemWidget(list_item, container)
 
+    def update_sync_progress_ui(self, track_identifier, percentage):
+        """Finds the correct row in the library table and updates the progress text."""
+        target_column = 5
+        
+        for row in range(self.table_songs.rowCount()):
+            title_widget = self.table_songs.cellWidget(row, 1)
+            if isinstance(title_widget, QLabel):
+                song_name = title_widget.text()
+            else:
+                item = self.table_songs.item(row, 1)
+                song_name = item.text() if item else ""
+                
+            if song_name and song_name in track_identifier:
+                widget = self.table_songs.cellWidget(row, target_column)
+                if isinstance(widget, QPushButton):
+                    widget.setText(f"Syncing... {percentage}%")
+                break
+
     def toggle_full_karaoke_mode(self):
         """Toggles True Karaoke Mode: activates dual-channel mixer + microphone."""
         if not self.karaoke_mode_active:
             # --- Turning ON ---
+            # FIX: Hot-reload JSON from disk to catch stems generated in the background
+            if hasattr(self, 'player') and getattr(self.player, 'current_track', None):
+                json_path = os.path.splitext(self.player.current_track)[0] + ".json"
+                if os.path.isfile(json_path):
+                    try:
+                        with open(json_path, 'r', encoding='utf-8') as f:
+                            self.lyrics_db = json.load(f)
+                    except Exception:
+                        pass
+                        
             if not self.lyrics_db:
                 QMessageBox.warning(self, "No Lyrics Loaded", "Cannot activate Full Karaoke Mode without a loaded karaoke track.")
                 return
@@ -4290,6 +5344,11 @@ X-GNOME-Autostart-enabled=true"""
             # device and conflicting with pygame.mixer.Channel playback.
             self.player.clear_karaoke_channels()
             
+            # --- Visual Loading State ---
+            self.btn_full_karaoke.setText("⏳ Syncing Streams...")
+            self.btn_full_karaoke.setEnabled(False)
+            QApplication.processEvents()
+            
             # Start the dual-channel mixer using WAV fast-slicing
             logger.info(f"Full Karaoke Mode ON: dual-channel mixer at {current_pos:.2f}s")
             success = self.player.start_karaoke_mixer(
@@ -4299,6 +5358,11 @@ X-GNOME-Autostart-enabled=true"""
                 vocal_volume=vocal_vol,
                 start_paused=was_paused
             )
+            
+            # Restore button text
+            self.btn_full_karaoke.setText("🎤 Full Karaoke Mode")
+            self.btn_full_karaoke.setEnabled(True)
+            
             if not success:
                 QMessageBox.warning(self, "Mixer Error", "Failed to start the dual-channel karaoke mixer.")
                 return
@@ -4310,6 +5374,8 @@ X-GNOME-Autostart-enabled=true"""
             self.mic_worker.start()
             
             self.karaoke_mode_active = True
+            if hasattr(self, 'btn_edit_lyrics'):
+                self.btn_edit_lyrics.setEnabled(False)
             self.vocal_guide_widget.setVisible(True)
             self.btn_full_karaoke.setStyleSheet("background-color: #2D7D46; color: #F0C419; padding: 8px 16px; font-weight: bold; border-radius: 4px; border: 1px solid #F0C419;")
             logger.info("Full Karaoke Mode activated (dual-channel mixer + mic).")
@@ -4378,6 +5444,8 @@ X-GNOME-Autostart-enabled=true"""
         # Step 5: Reset state and update UI
         self.original_track_path = None
         self.karaoke_mode_active = False
+        if hasattr(self, 'btn_edit_lyrics') and hasattr(self, 'player'):
+            self.btn_edit_lyrics.setEnabled(getattr(self.player, 'is_paused', False))
         self.vocal_guide_widget.setVisible(False)
         self.btn_full_karaoke.setStyleSheet(
             "background-color: #1A1A1A; color: #B3B3B3; padding: 8px 16px; font-weight: bold; border-radius: 4px;"
@@ -4583,7 +5651,10 @@ X-GNOME-Autostart-enabled=true"""
         
         logger.info(f"Background processing initiated silently for {song['name']}.")
             
-        whisper_lang = self.config.get("whisper_language", None)
+        import analytics
+        whisper_lang = analytics.get_track_language(song_path)
+        if not whisper_lang:
+            whisper_lang = self.config.get("whisper_language", None)
         worker = KaraokeProcessorWorker(
             song_path,
             use_mock=self.config["use_mock_karaoke"],
@@ -4596,29 +5667,34 @@ X-GNOME-Autostart-enabled=true"""
         # Log progress to the app logger; badge states in library update on scan
         def on_progress(msg, percentage):
             logger.info(f"Karaoke [{song['name']}] {msg} ({int(percentage)}%)")
+            self.update_sync_progress_ui(song_path, int(percentage))
                 
         worker.progress_signal.connect(on_progress)
         
         def on_finished(s_path, json_path):
             logger.info(f"Karaoke generation finished: {s_path} -> {json_path}")
-            self.active_karaoke_worker = None
             
-            self.scan_music_library()
-            if self.player.current_track == s_path:
-                self.load_karaoke_lyrics_data(s_path)
-            
-            # Start next queue item sequentially
-            self.process_next_karaoke_item()
+            def complete_transition():
+                self.scan_music_library()
+                if hasattr(self, 'player') and self.player.current_track == s_path:
+                    self.load_karaoke_lyrics_data(s_path)
+                
+                # Start next queue item sequentially
+                # If queue is empty, this function safely sets active_karaoke_worker = None after the thread has naturally died
+                self.process_next_karaoke_item()
+                
+            # Let the user see "100%" for a moment before refreshing the UI
+            QTimer.singleShot(1500, complete_transition)
             
         def on_error(s_path, error_msg):
             logger.error(f"Karaoke thread failure for {s_path}: {error_msg}")
-            self.active_karaoke_worker = None
             
             # Start next queue item sequentially
             self.process_next_karaoke_item()
             
         worker.finished_signal.connect(on_finished)
         worker.error_signal.connect(on_error)
+        worker.finished.connect(worker.deleteLater)
         
         self.active_karaoke_worker = worker
         self.update_sync_queue_ui()
@@ -4653,16 +5729,561 @@ X-GNOME-Autostart-enabled=true"""
             
         self.trigger_track_karaoke_generation(song, force=True)
 
+    def on_bulk_toggle_changed(self, checked):
+        if checked:
+            self.btn_bulk_toggle.setText("Everything")
+        else:
+            self.btn_bulk_toggle.setText("Missing")
+
     def run_bulk_karaoke_processing(self):
-        """Processes all missing tracks in the background sequentially."""
-        unprocessed = [s for s in self.scanned_songs if not s["has_karaoke"]]
+        """Processes missing or all tracks based on the toggle."""
+        process_all = getattr(self, 'btn_bulk_toggle', None) and self.btn_bulk_toggle.isChecked()
+        
+        if process_all:
+            unprocessed = self.scanned_songs
+        else:
+            unprocessed = [s for s in self.scanned_songs if not s["has_karaoke"]]
+            
         if not unprocessed:
             QMessageBox.information(self, "Up to Date", "All tracks in this folder already have word-synchronized karaoke files!")
             return
             
-        logger.info(f"Bulk processing started for {len(unprocessed)} tracks.")
+        logger.info(f"Bulk processing started for {len(unprocessed)} tracks. (Force: {process_all})")
         for song in unprocessed:
-            self.trigger_track_karaoke_generation(song, silent=True)
+            self.trigger_track_karaoke_generation(song, silent=True, force=process_all)
+
+    # ── AI Music Discovery Feed & Playback Analytics slots (v5.8.0) ──
+
+    def on_library_tab_changed(self, index):
+        """Called when switching tabs within the Full Library view."""
+        if index == 1:  # Tab 2: Most Listened
+            self.refresh_most_listened_table()
+
+    def refresh_most_listened_table(self):
+        """Queries the analytics layer to refresh the user's top played tracks."""
+        try:
+            import analytics
+            top_tracks = analytics.get_top_played_tracks(limit=50, playlist_name="Global")
+            
+            self.table_most_listened.setRowCount(0)
+            self.table_most_listened.setRowCount(len(top_tracks))
+            
+            for row_idx, track in enumerate(top_tracks):
+                title = track.get("title", "Unknown Title")
+                artist = track.get("artist", "Unknown Artist")
+                play_count = track.get("play_count", 0)
+                last_played = track.get("last_played_timestamp", "")
+                
+                if last_played:
+                    try:
+                        last_played = last_played.split(".")[0].replace("T", " ")
+                    except Exception:
+                        pass
+                
+                item_title = QTableWidgetItem(title)
+                item_artist = QTableWidgetItem(artist)
+                item_count = QTableWidgetItem(str(play_count))
+                item_time = QTableWidgetItem(last_played)
+                
+                # Make items read-only
+                for item in (item_title, item_artist, item_count, item_time):
+                    item.setFlags(item.flags() ^ Qt.ItemFlag.ItemIsEditable)
+                    
+                self.table_most_listened.setItem(row_idx, 0, item_title)
+                self.table_most_listened.setItem(row_idx, 1, item_artist)
+                self.table_most_listened.setItem(row_idx, 2, item_count)
+                self.table_most_listened.setItem(row_idx, 3, item_time)
+        except Exception as e:
+            logger.error(f"Failed to refresh most listened table: {e}")
+
+    def reroll_discovery_feed(self):
+        """Triggers manual re-rolling of the discovery feed, with session token checks and rate-limiting."""
+        if getattr(self, "reroll_count", 10) <= 0:
+            self.btn_reroll_feed.setEnabled(False)
+            QMessageBox.warning(self, "No Re-rolls Left", "You have exhausted your 10 session re-rolls.")
+            return
+            
+        # Extract and exclude currently displayed recommendations from future rolls (manual re-roll exclusion)
+        try:
+            import analytics
+            for row in range(self.table_discovery.rowCount()):
+                title_item = self.table_discovery.item(row, 1)
+                artist_item = self.table_discovery.item(row, 2)
+                if title_item and artist_item:
+                    title = title_item.text().strip()
+                    artist = artist_item.text().strip()
+                    analytics.add_to_recommendation_history(title, artist)
+        except Exception as e:
+            logger.error(f"Failed to save current recommendation list to exclusion history: {e}")
+            
+        # UI Rate-limiting: Instantly disable button, update text (Rate-limiting directive)
+        self.btn_reroll_feed.setEnabled(False)
+        self.btn_reroll_feed.setText("🧠 Analyzing...")
+        
+        # Decrement counter
+        self.reroll_count -= 1
+        
+        # Launch Discovery
+        self.run_gemini_discovery()
+        
+        # Start a 10-second QTimer to re-enable button after cooldown
+        QTimer.singleShot(10000, self.enable_reroll_button_after_cooldown)
+
+    def enable_reroll_button_after_cooldown(self):
+        """Re-enables the re-roll button and restores text showing remaining tokens."""
+        if getattr(self, "reroll_count", 10) > 0:
+            self.btn_reroll_feed.setEnabled(True)
+            self.btn_reroll_feed.setText(f"Re-roll Feed ({self.reroll_count} Left)")
+        else:
+            self.btn_reroll_feed.setEnabled(False)
+            self.btn_reroll_feed.setText("Re-roll Feed (0 Left)")
+
+    def run_gemini_discovery(self):
+        """Compiles contexts and spawns background thread to fetch recommendations."""
+        api_key = self.config.get("gemini_api_key", "").strip()
+        if not api_key:
+            self.table_discovery.setRowCount(0)
+            item_msg = QTableWidgetItem("Please enter a valid Gemini API Key in the Settings page to enable AI music discovery.")
+            item_msg.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.table_discovery.setRowCount(1)
+            self.table_discovery.setItem(0, 1, item_msg)
+            # Re-enable button in case it was a re-roll click without a key
+            self.enable_reroll_button_after_cooldown()
+            return
+            
+        # Disable feed table during loading
+        self.table_discovery.setRowCount(0)
+        self.table_discovery.setRowCount(1)
+        loading_item = QTableWidgetItem("Fetching recommendations from Google Gemini 3.5 Flash...")
+        loading_item.setFlags(Qt.ItemFlag.NoItemFlags)
+        self.table_discovery.setItem(0, 1, loading_item)
+        
+        # Build prompt lists
+        try:
+            import analytics
+            # 1. Top 10 played tracks
+            top_10 = analytics.get_top_played_tracks(limit=10, playlist_name="Global")
+            
+            # Fetch explicitly favorited tracks
+            favorites = analytics.get_all_favorites()
+            
+            # Merge and deduplicate case-insensitively to create the user's core profile
+            seen_tracks = set()
+            hybrid_music_profile = []
+            
+            for s in top_10:
+                artist = s.get("artist", "Unknown Artist").strip()
+                title = s.get("title", "Unknown Title").strip()
+                key = (artist.lower(), title.lower())
+                if key not in seen_tracks:
+                    seen_tracks.add(key)
+                    hybrid_music_profile.append({"artist": artist, "title": title})
+                    
+            for s in favorites:
+                artist = s.get("artist", "Unknown Artist").strip()
+                title = s.get("title", "Unknown Title").strip()
+                key = (artist.lower(), title.lower())
+                if key not in seen_tracks:
+                    seen_tracks.add(key)
+                    hybrid_music_profile.append({"artist": artist, "title": title})
+            
+            # 2. Excluded Filter List
+            rec_history = analytics.get_recommendation_history()
+            
+            top_50 = analytics.get_top_played_tracks(limit=50, playlist_name="Global")
+            top_50_paths = {t["track_path"] for t in top_50 if "track_path" in t}
+            
+            excluded_library = []
+            root_dir = self.config.get("music_root_dir", "")
+            
+            # Recursively scan root_dir for all owned audio tracks across playlists/subfolders
+            all_owned_paths = []
+            if os.path.isdir(root_dir):
+                for walk_root, walk_dirs, walk_files in os.walk(root_dir):
+                    # Firewall: Skip raw Demucs wav stems
+                    if "instrumentals" in walk_root.replace("\\", "/").lower():
+                        continue
+                    for file in walk_files:
+                        if "instrumentals" in file.lower():
+                            continue
+                        if file.lower().endswith((".mp3", ".wav")):
+                            all_owned_paths.append(os.path.join(walk_root, file))
+                            
+            for path in all_owned_paths:
+                if path not in top_50_paths:
+                    artist, title = analytics.parse_track_meta(path)
+                    excluded_library.append({"title": title, "artist": artist})
+                    
+            excluded_filter_list = rec_history + excluded_library
+            
+        except Exception as e:
+            logger.error(f"Error compiling analytics lists for discovery: {e}")
+            hybrid_music_profile = []
+            excluded_filter_list = []
+            
+        # Format lists into prompt
+        profile_songs_str = "\n".join([f"- {s['artist']} - {s['title']}" for s in hybrid_music_profile])
+        excluded_truncated = excluded_filter_list[:500]
+        excluded_str = "\n".join([f"- {s.get('artist', 'Unknown')} - {s.get('title', 'Unknown')}" for s in excluded_truncated])
+        
+        genre = self.txt_discovery_genre.text().strip()
+        
+        prompt = "Based on the user's top 10 tracks and favorite tracks:\n"
+        if profile_songs_str:
+            prompt += f"{profile_songs_str}\n"
+        else:
+            prompt += "- (No playback history or favorites yet. Recommend a highly rated diverse playlist.)\n"
+            
+        prompt += f"\nPlease recommend 10 new, real-world tracks.\n"
+        
+        if genre:
+            prompt += f"\nFilter by Genre/Style: {genre}\n"
+            
+        if excluded_str:
+            prompt += f"\nExcluded Filter List (DO NOT recommend any of these):\n{excluded_str}\n"
+            
+        system_instruction = (
+            "You are a precise music database recommendation agent. Your task is to analyze a user's passive "
+            "listening habits alongside their active favorites to recommend 10 new, real-world tracks they "
+            "do not currently have in heavy rotation.\n\n"
+            "CRITICAL RULES:\n"
+            "1. Every song and artist combination MUST exist in reality. Do not hallucinate or invent titles.\n"
+            "2. You are FORBIDDEN from recommending any track listed in the Excluded Filter List.\n"
+            "3. Adhere strictly to the requested optional Genre if provided.\n"
+            "4. Return output strictly as a JSON array of objects: [{'title': '...', 'artist': '...'}]"
+        )
+        
+        # Spawn background worker thread
+        self.discovery_worker = GeminiDiscoveryWorker(api_key, prompt, system_instruction)
+        self.discovery_worker.finished.connect(self.on_discovery_finished)
+        self.discovery_worker.error.connect(self.on_discovery_error)
+        self.discovery_worker.start()
+
+    def populate_discovery_table_view(self, recommendations):
+        """Populates the Discovery Feed table with AI recommendations."""
+        self.table_discovery.setRowCount(0)
+        self.table_discovery.setRowCount(len(recommendations))
+        
+        for row_idx, track in enumerate(recommendations):
+            title = track.get("title", "Unknown Title")
+            artist = track.get("artist", "Unknown Artist")
+            
+            # Checkbox column
+            chk = QCheckBox()
+            chk.setChecked(False)
+            chk.setCursor(Qt.CursorShape.PointingHandCursor)
+            chk.setStyleSheet("""
+                QCheckBox {
+                    spacing: 0px;
+                }
+                QCheckBox::indicator {
+                    width: 24px;
+                    height: 24px;
+                    background-color: #242424;
+                    border: 2px solid #555555;
+                    border-radius: 4px;
+                    image: none;
+                }
+                QCheckBox::indicator:checked {
+                    background-color: #1DB954;
+                    border: 2px solid #1DB954;
+                    image: none;
+                }
+                QCheckBox::indicator:hover {
+                    border: 2px solid #1DB954;
+                }
+            """)
+            chk_widget = QWidget()
+            chk_layout = QHBoxLayout(chk_widget)
+            chk_layout.addWidget(chk)
+            chk_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            chk_layout.setContentsMargins(0, 0, 0, 0)
+            
+            item_title = QTableWidgetItem(title)
+            item_artist = QTableWidgetItem(artist)
+            
+            item_title.setFlags(item_title.flags() ^ Qt.ItemFlag.ItemIsEditable)
+            item_artist.setFlags(item_artist.flags() ^ Qt.ItemFlag.ItemIsEditable)
+            
+            self.table_discovery.setCellWidget(row_idx, 0, chk_widget)
+            self.table_discovery.setItem(row_idx, 1, item_title)
+            self.table_discovery.setItem(row_idx, 2, item_artist)
+            
+        logger.info(f"Loaded {len(recommendations)} AI recommendations into the Discovery Feed.")
+
+    def on_discovery_finished(self, recommendations):
+        """Populates the Discovery Feed table with AI recommendations."""
+        self.populate_discovery_table_view(recommendations)
+
+    def on_discovery_error(self, error_msg):
+        """Displays error details to the user and logs them safely."""
+        logger.error(f"Gemini Discovery failed: {error_msg}")
+        self.table_discovery.setRowCount(0)
+        self.table_discovery.setRowCount(1)
+        err_item = QTableWidgetItem(f"Discovery Error: {error_msg}")
+        err_item.setFlags(Qt.ItemFlag.NoItemFlags)
+        self.table_discovery.setItem(0, 1, err_item)
+
+    def download_selected_tracks(self):
+        """Wires checked recommendations into background grabber, updates feed list and switches view."""
+        checked_tracks = []
+        remaining_tracks = []
+        
+        for row in range(self.table_discovery.rowCount()):
+            chk_widget = self.table_discovery.cellWidget(row, 0)
+            if chk_widget:
+                chk = chk_widget.findChild(QCheckBox)
+                title_item = self.table_discovery.item(row, 1)
+                artist_item = self.table_discovery.item(row, 2)
+                if title_item and artist_item:
+                    track_info = {
+                        "title": title_item.text(),
+                        "artist": artist_item.text()
+                    }
+                    if chk and chk.isChecked():
+                        checked_tracks.append(track_info)
+                    else:
+                        remaining_tracks.append(track_info)
+                        
+        if not checked_tracks:
+            QMessageBox.information(self, "No Selection", "Please check at least one track to download.")
+            return
+            
+        # 1. Append selected tracks to recommendation_history
+        try:
+            import analytics
+            for track in checked_tracks:
+                analytics.add_to_recommendation_history(track["title"], track["artist"])
+        except Exception as e:
+            logger.error(f"Failed to log download to recommendation history: {e}")
+            
+        # 2. Erase selected songs from the Discovery Feed list table and readjust
+        self.populate_discovery_table_view(remaining_tracks)
+            
+        # 3. Convert to formatted search query list without "audio" keyword (Amendment 1)
+        queries = []
+        for track in checked_tracks:
+            queries.append(f"ytsearch1:{track['artist']} - {track['title']}")
+            
+        # Paste queries into the text field on Grab/Queue tab
+        self.txt_yt_urls.setPlainText("\n".join(queries))
+        
+        # 4. View Handshake: programmatically switch selection to Grab/Queue tab
+        self.show_page(1)
+        
+        # 5. Trigger bulk download
+        self.trigger_youtube_download()
+
+
+class GeminiDiscoveryWorker(QThread):
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+    
+    def __init__(self, api_key, prompt, system_instruction):
+        super().__init__()
+        self.api_key = api_key
+        self.prompt = prompt
+        self.system_instruction = system_instruction
+        
+    def run(self):
+        import urllib.request
+        import json
+        import urllib.error
+        import logging
+
+        logger = logging.getLogger("MozZzartDiscoveryWorker")
+
+        fallback_models = [
+            "gemini-3.5-flash",
+            "gemini-3-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash"
+        ]
+        
+        headers = {
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": self.prompt
+                        }
+                    ]
+                }
+            ],
+            "systemInstruction": {
+                "parts": [
+                    {
+                        "text": self.system_instruction
+                    }
+                ]
+            },
+            "generationConfig": {
+                "responseMimeType": "application/json"
+            }
+        }
+
+        last_error_msg = "Unknown error"
+        
+        for model in fallback_models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+            logger.info(f"Attempting discovery with model: {model}")
+            try:
+                req = urllib.request.Request(
+                    url, 
+                    data=json.dumps(payload).encode("utf-8"), 
+                    headers=headers, 
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    res_data = response.read().decode("utf-8")
+                    res_json = json.loads(res_data)
+                    
+                    candidates = res_json.get("candidates", [])
+                    if not candidates:
+                        raise ValueError("Gemini returned an empty response.")
+                        
+                    text_content = candidates[0]["content"]["parts"][0]["text"]
+                    recommendations = json.loads(text_content.strip())
+                    
+                    if isinstance(recommendations, dict) and "recommendations" in recommendations:
+                        recommendations = recommendations["recommendations"]
+                        
+                    if not isinstance(recommendations, list):
+                        raise ValueError("Gemini response is not a valid list.")
+                        
+                    self.finished.emit(recommendations)
+                    return
+                    
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    last_error_msg = f"Rate Limit Exceeded (HTTP 429): Gemini API rate limit reached."
+                else:
+                    try:
+                        err_body = e.read().decode("utf-8")
+                        err_json = json.loads(err_body)
+                        msg = err_json.get("error", {}).get("message", str(e))
+                        last_error_msg = f"Gemini API Error (HTTP {e.code}): {msg}"
+                    except Exception:
+                        last_error_msg = f"Gemini API Error (HTTP {e.code}): {e.reason}"
+                logger.warning(f"Model {model} failed: {last_error_msg}")
+            except Exception as e:
+                last_error_msg = str(e)
+                logger.warning(f"Model {model} failed: {last_error_msg}")
+                
+        # If loop finished, all models failed
+        logger.error(f"All fallback models failed. Final error: {last_error_msg}")
+        self.error.emit(f"Failed to generate recommendations: {last_error_msg}")
+
+
+class GeminiLyricsCorrectionWorker(QThread):
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+    
+    def __init__(self, api_key, prompt, system_instruction):
+        super().__init__()
+        self.api_key = api_key
+        self.prompt = prompt
+        self.system_instruction = system_instruction
+        
+    def run(self):
+        import urllib.request
+        import json
+        import urllib.error
+        import logging
+
+        logger = logging.getLogger("MozZzartCorrectionWorker")
+
+        fallback_models = [
+            "gemini-3.5-flash",
+            "gemini-3-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash"
+        ]
+        
+        headers = {
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": self.prompt
+                        }
+                    ]
+                }
+            ],
+            "systemInstruction": {
+                "parts": [
+                    {
+                        "text": self.system_instruction
+                    }
+                ]
+            },
+            "generationConfig": {
+                "responseMimeType": "application/json"
+            }
+        }
+
+        last_error_msg = "Unknown error"
+        
+        for model in fallback_models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+            logger.info(f"Attempting correction with model: {model}")
+            try:
+                req = urllib.request.Request(
+                    url, 
+                    data=json.dumps(payload).encode("utf-8"), 
+                    headers=headers, 
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    res_data = response.read().decode("utf-8")
+                    res_json = json.loads(res_data)
+                    
+                    candidates = res_json.get("candidates", [])
+                    if not candidates:
+                        raise ValueError("Gemini returned an empty response.")
+                        
+                    text_content = candidates[0]["content"]["parts"][0]["text"]
+                    data = json.loads(text_content.strip())
+                    
+                    if isinstance(data, dict):
+                        for key in ["corrected_lyrics", "lyrics", "lines", "corrections"]:
+                            if key in data and isinstance(data[key], list):
+                                data = data[key]
+                                break
+                                
+                    if not isinstance(data, list):
+                        raise ValueError("Gemini response is not a valid list.")
+                        
+                    # Ensure all items are strings
+                    data = [str(x) for x in data]
+                    
+                    self.finished.emit(data)
+                    return
+                    
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    last_error_msg = f"Rate Limit Exceeded (HTTP 429): Gemini API rate limit reached."
+                else:
+                    try:
+                        err_body = e.read().decode("utf-8")
+                        err_json = json.loads(err_body)
+                        msg = err_json.get("error", {}).get("message", str(e))
+                        last_error_msg = f"Gemini API Error (HTTP {e.code}): {msg}"
+                    except Exception:
+                        last_error_msg = f"Gemini API Error (HTTP {e.code}): {e.reason}"
+                logger.warning(f"Model {model} failed: {last_error_msg}")
+            except Exception as e:
+                last_error_msg = str(e)
+                logger.warning(f"Model {model} failed: {last_error_msg}")
+                
+        logger.error(f"All fallback models failed. Final error: {last_error_msg}")
+        self.error.emit(f"Failed to correct lyrics: {last_error_msg}")
 
 
 def main():
@@ -4677,6 +6298,27 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     
+    # ── Single Instance Guard ──────────────────────────────────────────
+    # Prevents multiple copies of the app from running simultaneously.
+    from PyQt6.QtCore import QSharedMemory
+    shared_memory_key = "MozZzartPlayer_SingleInstance_Lock_Token"
+    shared_mem = QSharedMemory(shared_memory_key)
+    
+    # HOTFIX: Check if this process was launched with command-line arguments.
+    # Regular users double-clicking the app pass 0 extra args (len == 1).
+    # Background worker subprocesses (like Demucs/PyInstaller forks) pass extra arguments.
+    is_background_worker = len(sys.argv) > 1
+    
+    # Only enforce the single-instance window block for primary GUI launches
+    if not is_background_worker:
+        if shared_mem.attach():
+            print("[!] MozZzart Player is already running. Exiting secondary instance safely.")
+            sys.exit(0)
+            
+        if not shared_mem.create(1):
+            print("[!] Critical Error checking single instance state. Exiting.")
+            sys.exit(1)
+    
     if not utils.has_dependencies():
         setup_dialog = DependencySetupDialog()
         if setup_dialog.exec() != QDialog.DialogCode.Accepted:
@@ -4687,6 +6329,37 @@ def main():
     sys.exit(app.exec())
 
 if __name__ == '__main__':
+    import sys
+    import multiprocessing
+    multiprocessing.freeze_support()
+    
+    # 2. PYINSTALLER SUBPROCESS MULTIPLEXER (THE HOTFIX)
+    # When compiled, sys.executable is MozZzartPlayer.exe. If a background worker 
+    # calls `subprocess.Popen([sys.executable, "-m", "demucs", ...])`, 
+    # it launches the .exe again. We must intercept this and run the module natively, 
+    # otherwise it will load a duplicate GUI in the background!
+    if getattr(sys, 'frozen', False) and len(sys.argv) > 2 and sys.argv[1] == "-m":
+        import runpy
+        
+        # Reconstruct sys.argv so the target module parses its arguments correctly.
+        # Old: ['MozZzartPlayer.exe', '-m', 'demucs', ...]
+        # New: ['demucs', ...]
+        module_name = sys.argv[2]
+        
+        # PyInstaller does not package demucs.__main__ by default.
+        # Route 'demucs' directly to 'demucs.separate' where the CLI logic resides.
+        if module_name == "demucs":
+            module_name = "demucs.separate"
+            
+        sys.argv = sys.argv[2:] 
+        
+        # Execute the module natively and terminate this process immediately
+        try:
+            runpy.run_module(module_name, run_name="__main__", alter_sys=True)
+        except SystemExit as e:
+            sys.exit(e.code)
+        sys.exit(0)
+
     main()
 
 # ==============================================================================
